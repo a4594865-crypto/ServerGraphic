@@ -14,24 +14,21 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f; 
 
-    // ✅ 新增：控制 OnTick 的刷新頻率 (單位:秒)，預設 0.1 秒
-    [JsonPropertyName("UpdateInterval")]
-    public float UpdateInterval { get; set; } = 0.1f; 
+    // ✅ 改用原生的 Tick 區間來控制 OnTick 刷新率 (建議值: 4, 8, 16, 32, 64)
+    [JsonPropertyName("UpdateTicks")]
+    public int UpdateTicks { get; set; } = 8; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.1"; // 消除殘影黑框 + OnTick刷新率控制
+    public override string ModuleVersion => "1.5.2"; // 原生 Tick 跳幀版 + 消除黑框
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
 
     private string _activeCenterMessage = "";
     private float _centerMessageExpiration = 0f;
-
-    // ✅ 新增：用於控制 OnTick 更新率的計時變數
-    private float _lastTickTime = 0f;
 
     private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
     
@@ -45,13 +42,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         RegisterListener<Listeners.OnTick>(() =>
         {
+            // ✅ 【極致效能優化】：使用原生 Tick 取餘數來跳幀 (4, 8, 16, 32, 64)
+            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+            if (Server.TickCount % tickInterval != 0) return;
+
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            // ✅ 【效能優化】：套用設定檔的更新率，時間沒到直接跳過，不佔用 CPU
-            if (Server.CurrentTime - _lastTickTime < Config.UpdateInterval) return;
-            _lastTickTime = Server.CurrentTime;
-
-            bool shouldFreezeUI = false; // 照抄你的 LiteMatchManager 判定變數[cite: 2]
+            bool shouldFreezeUI = false; 
 
             if (!string.IsNullOrEmpty(_activeCenterMessage))
             {
@@ -75,16 +72,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 }
             }
 
-            // ✅ 【關鍵修復】：完全照抄 LiteMatchManager 的 GameRestart 開關來消除幽靈黑框[cite: 2]
+            // ✅ 【消除幽靈黑框】：智慧控制引擎 GameRestart
             if (_gameRules != null)
             {
                 if (shouldFreezeUI)
                 {
-                    _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;[cite: 2]
+                    _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;
                 }
                 else
                 {
-                    _gameRules.GameRestart = false;[cite: 2]
+                    _gameRules.GameRestart = false; 
                 }
             }
         });
@@ -92,7 +89,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.1)");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.2)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
@@ -146,7 +143,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
         }
         
-        // 保險機制：在主動關閉時，立刻強制消除黑框
+        // 確保引擎黑框徹底被強制消除
         if (_gameRules != null)
         {
             _gameRules.GameRestart = false;
