@@ -18,7 +18,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.4.3"; // .NET 10 相容版
+    public override string ModuleVersion => "1.4.5"; // 採用 LiteMatch 的 GameRules 快取優化版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -26,6 +26,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public bool bShowingServerGraphic = false;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _hideTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
+    
+    // 借鑒 LiteMatchManager 的快取機制，極大化提升 OnTick 效能
+    private CCSGameRules? _gameRules;
+    private bool _gameRulesInitialized;
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
@@ -33,8 +37,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         RegisterListener<Listeners.OnTick>(() =>
         {
+            // 每一幀檢查：如果還沒抓過遊戲規則，才去抓一次
+            if (!_gameRulesInitialized) InitializeGameRules();
+
             if (bShowingServerGraphic) 
             {
+                // 現在 IsPaused() 直接讀取記憶體快取，瞬間完成，0 效能負擔！
                 if (IsPaused())
                 {
                     StopShowingGraphic();
@@ -55,6 +63,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public override void Load(bool hotReload)
     {
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
+        
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
         AddCommand("css_testhud", "Test HUD", (player, info) =>
@@ -63,6 +72,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             _hideTimer?.Kill();
             _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic); 
         });
+
+        // 如果是熱重載 (Hot Reload)，立刻初始化規則
+        if (hotReload)
+        {
+            InitializeGameRules();
+        }
         
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
     }
@@ -70,6 +85,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void OnMapStartHandler(string mapName)
     {
         StopShowingGraphic();
+        
+        // 借鑒 LiteMatchManager：換地圖時清空快取，讓 OnTick 重新抓取
+        _gameRules = null;
+        _gameRulesInitialized = false;
+    }
+
+    // 將全服搜索獨立出來，只執行一次
+    private void InitializeGameRules()
+    {
+        if (_gameRulesInitialized) return;
+        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+        _gameRules = gameRulesProxy?.GameRules;
+        _gameRulesInitialized = _gameRules != null;
     }
 
     [GameEventHandler]
@@ -77,7 +105,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         _checkDelayTimer?.Kill();
 
-        // 延遲 0.2 秒再判定，等待伺服器參數切換完畢，避免閃現
         _checkDelayTimer = AddTimer(0.2f, () =>
         {
             if (IsWarmup() || IsPaused() || IsKnifeRound())
@@ -87,9 +114,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
 
             bShowingServerGraphic = true;
+            
             _hideTimer?.Kill();
-
-            // 依照設定檔的自訂秒數來關閉圖片
             _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic);
         });
 
@@ -122,7 +148,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
-    // 專為 .NET 10 / 最新 CounterStrikeSharp 修正的玩家狀態驗證
     public static bool IsPlayerValid(CCSPlayerController? player)
     {
         return player != null
@@ -135,18 +160,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private bool IsWarmup()
     {
-        var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
-        return gameRules != null && gameRules.WarmupPeriod;
+        // 直接使用快取的 _gameRules，不用再搜尋了！
+        return _gameRules != null && _gameRules.WarmupPeriod;
     }
 
     private bool IsPaused()
     {
-        var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
-        if (gameRules != null)
+        // 直接使用快取的 _gameRules，不用再搜尋了！
+        if (_gameRules != null)
         {
-            return gameRules.MatchWaitingForResume || 
-                   gameRules.TerroristTimeOutActive || 
-                   gameRules.CTTimeOutActive;
+            return _gameRules.MatchWaitingForResume || 
+                   _gameRules.TerroristTimeOutActive || 
+                   _gameRules.CTTimeOutActive;
         }
         return false;
     }
