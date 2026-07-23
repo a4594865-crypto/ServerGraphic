@@ -6,6 +6,8 @@ using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
 using HttpUtils;
 using System.Linq;
+using System;
+using System.Threading.Tasks;
 
 namespace ServerGraphic;
 
@@ -19,29 +21,21 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("ImageHeight")]
     public int ImageHeight { get; set; } = 120;
-
-    // 🚨 新增：顯示秒數設定 (預設 5.0 秒)
-    [JsonPropertyName("DisplayDuration")]
-    public float DisplayDuration { get; set; } = 5.0f;
-
-    // 🚨 新增：OnTick 刷新頻率 (預設 8，代表每 8 個 Tick 刷新一次，節省 CPU)
-    [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 8;
+    
+    // 💡 已經刪除 DisplayDuration 和 UpdateTicks，交給引擎原生淡出，配置檔更乾淨
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.4"; // 加入顯示秒數與 OnTick 刷新設定
+    public override string ModuleVersion => "1.0.5"; // 升級為原生淡出、完美防刀局版
     public override string ModuleAuthor => "unfortunate";
-    
-    public bool bShowingServerGraphic = false;
+
     public ServerGraphicConfig Config { get; set; } = new();
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphice] Loading +++ ");
-        RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
         if (hotReload)
         {
             Console.WriteLine("[INFO] [CS2ServerGraphic] hotReload +++ ");
@@ -54,28 +48,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
-        RegisterListener<Listeners.OnTick>(() =>
-        {
-            if (bShowingServerGraphic) 
-            {
-                // 🚨 新增：跳幀邏輯 (避免每幀發送導致效能浪費)
-                int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-                if (Server.TickCount % tickInterval != 0) return;
-
-                foreach (var player in Utilities.GetPlayers())
-                {
-                    if (!IsPlayerValid(player))
-                        continue;
-
-                    player.PrintToCenterHtml($"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>");
-                }
-            }
-        });
-    }
-
-    private void OnMapStartHandler(string mapName)
-    {
-        bShowingServerGraphic = false;
+        // 💡 已經砍掉 OnTick 狂刷邏輯，完全解放伺服器 CPU
     }
 
     public void GetServerGraphicUrl()
@@ -100,30 +73,25 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        // 1. 攔截暖身與刀局
         if (!IsLive())
         {
             return HookResult.Continue;
         }
 
-        Logger.LogInformation($"[OnEventRoundStart] Round started. HUD will show for {Config.DisplayDuration} seconds.");
-        bShowingServerGraphic = true;
-        
-        // 🚨 修改：使用設定檔中的秒數 (Config.DisplayDuration)
-        AddTimer(Config.DisplayDuration, () =>
+        // 2. 只在真正的 Live 局組合 HTML
+        string imageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
+
+        // 3. 全局發送一次，剩下的淡出動畫交給 CS2 原生引擎處理
+        foreach (var player in Utilities.GetPlayers())
         {
-            bShowingServerGraphic = false;
-            
-            // 🚨 新增：時間到的瞬間，主動清空所有玩家的畫面，避免圖片殘留
-            foreach (var player in Utilities.GetPlayers())
+            if (IsPlayerValid(player))
             {
-                if (IsPlayerValid(player))
-                {
-                    player.PrintToCenterHtml(""); 
-                }
+                player.PrintToCenterHtml(imageHtml);
             }
-            
-            Logger.LogInformation("[OnEventRoundStart] Display duration ended, HUD cleared.");
-        });
+        }
+        
+        Logger.LogInformation("[OnEventRoundStart] HUD sent to players, letting native UI handle fade-out.");
         
         return HookResult.Continue;
     }
@@ -143,6 +111,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private bool IsLive()
     {
+        // 1. 攔截內建暖身時間
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
         {
@@ -152,17 +121,34 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
         }
 
-        var maxMoneyConVar = ConVar.Find("mp_maxmoney");
-        if (maxMoneyConVar != null)
+        // 2. 對準你的 CFG：攔截 mp_maxmoney 0
+        var maxMoney = ConVar.Find("mp_maxmoney");
+        if (maxMoney != null)
         {
-            try 
-            { 
-                if (maxMoneyConVar.GetPrimitiveValue<int>() == 0) return false; 
-            } 
-            catch { }
+            // 避免型別報錯，int 和 float 都嘗試抓取
+            try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }
+            try { if (maxMoney.GetPrimitiveValue<float>() == 0f) return false; } catch { }
         }
 
-        return true;
+        // 3. 對準你的 CFG：攔截 mp_give_player_c4 0
+        var giveC4 = ConVar.Find("mp_give_player_c4");
+        if (giveC4 != null)
+        {
+            // C4 常常被底層當作 bool 處理，所以兩者都相容
+            try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }
+            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { } 
+        }
+
+        // 4. 對準你的 CFG (終極保險)：攔截 mp_free_armor 1
+        // 正規競技局買甲要錢(0)，只有刀局 CFG 裡會設定免費給甲(1)
+        var freeArmor = ConVar.Find("mp_free_armor");
+        if (freeArmor != null)
+        {
+            try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }
+            try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
+        }
+
+        return true; // 如果以上都沒攔截到，才判定為真正的 Live 局
     }
     #endregion
 }
