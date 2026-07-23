@@ -73,25 +73,30 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 1. 攔截暖身與刀局
+        // 1. 判斷是否為 Live 局
         if (!IsLive())
         {
+            Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，略過 HUD 顯示。");
             return HookResult.Continue;
         }
 
-        // 2. 只在真正的 Live 局組合 HTML
+        Logger.LogInformation("[ServerGraphic] 偵測為 Live 局！準備延遲發送 HUD...");
+
         string imageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
 
-        // 3. 全局發送一次，剩下的淡出動畫交給 CS2 原生引擎處理
-        foreach (var player in Utilities.GetPlayers())
+        // 🚨 核心修復：延遲 0.5 秒發送！
+        // 避開回合開始瞬間，CS2 引擎強制清空畫面的動作
+        AddTimer(0.5f, () =>
         {
-            if (IsPlayerValid(player))
+            foreach (var player in Utilities.GetPlayers())
             {
-                player.PrintToCenterHtml(imageHtml);
+                if (IsPlayerValid(player))
+                {
+                    player.PrintToCenterHtml(imageHtml);
+                }
             }
-        }
-        
-        Logger.LogInformation("[OnEventRoundStart] HUD sent to players, letting native UI handle fade-out.");
+            Logger.LogInformation("[ServerGraphic] HUD 圖片發送成功！");
+        });
         
         return HookResult.Continue;
     }
