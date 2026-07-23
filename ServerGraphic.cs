@@ -21,7 +21,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.3"; // 修正跳幀邏輯：徹底壓制黑框版
+    public override string ModuleVersion => "1.5.4"; // 嚴格除錯：防卡圖 + 防換圖崩潰
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -43,33 +43,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            // 先判斷當前時間點，是否「應該要顯示 UI」
             bool isUiActive = !string.IsNullOrEmpty(_activeCenterMessage) && (Server.CurrentTime <= _centerMessageExpiration);
-            bool isPaused = IsPaused();
 
-            // 🚨 步驟一：【消除黑框的底層壓制】
-            // 這個區塊必須「每個 Tick」都執行，絕對不能跳幀，否則引擎黑框會趁虛而入！
+            // 🚨 【極度致命 BUG 修正】：絕對不能寫死 _gameRules.GameRestart = false; 
+            // 這裡完全採用 LiteMatchManager 8.53 的防卡圖寫法，讓它跟隨引擎原生的 RestartRoundTime。
             if (_gameRules != null)
             {
-                if (isUiActive && !isPaused)
-                {
-                    _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;
-                }
-                else
-                {
-                    _gameRules.GameRestart = false; // 強制將黑框關閉
-                }
+                _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;
             }
 
             // ==========================================
-            // 🚨 步驟二：【發送 HTML 封包給玩家】 (這非常耗 CPU，所以在這裡攔截跳幀)
+            // 效能跳幀處理 (只攔截發送 HTML 的消耗，不攔截上方的引擎同步)
             int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
             if (Server.TickCount % tickInterval != 0) return;
             // ==========================================
 
             if (isUiActive)
             {
-                if (isPaused)
+                if (IsPaused())
                 {
                     StopShowingGraphic();
                     return;
@@ -82,7 +73,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
             else if (!string.IsNullOrEmpty(_activeCenterMessage))
             {
-                // 時間到了，呼叫清理方法把殘影洗掉
                 StopShowingGraphic();
             }
         });
@@ -90,7 +80,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.3)");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.4)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
@@ -109,10 +99,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void OnMapStartHandler(string mapName)
     {
-        StopShowingGraphic();
+        // 🚨 嚴格除錯：換圖期間 (OnMapStart) 玩家實體正在銷毀或尚未建立
+        // 絕對不可呼叫 Utilities.GetPlayers() 進行 foreach，否則必定導致伺服器報錯！
+        // 這裡只做最安全的記憶體變數重置。
+        _activeCenterMessage = "";
+        _centerMessageExpiration = 0f;
         _gameRules = null;
         _gameRulesInitialized = false;
         _lastRuleCheckTime = 0f;
+        
+        if (_checkDelayTimer != null)
+        {
+            _checkDelayTimer.Kill();
+            _checkDelayTimer = null;
+        }
     }
 
     private void InitializeGameRules()
@@ -138,16 +138,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         if (!string.IsNullOrEmpty(_activeCenterMessage))
         {
             _activeCenterMessage = "";
+            
+            // 正常遊戲期間清除畫面
             foreach (var p in Utilities.GetPlayers())
             {
                 if (IsPlayerValid(p)) p.PrintToCenterHtml(""); 
             }
-        }
-        
-        // 保險機制：在主動關閉時，立刻強制消除黑框
-        if (_gameRules != null)
-        {
-            _gameRules.GameRestart = false;
         }
         
         if (_checkDelayTimer != null)
