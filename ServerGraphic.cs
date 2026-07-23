@@ -28,7 +28,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.7"; // 原生事件連動版：完美同步凍結時間
+    public override string ModuleVersion => "1.0.8"; // 更新為 1.0.8: 修復 restartgame 導致的 1 秒閃爍
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -46,6 +46,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
+        // 這裡一樣幫你保留了原本的 HTML 組合方式
         currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
 
         // 負責在凍結時間內維持圖片顯示
@@ -66,19 +67,38 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         });
     }
 
-    // 🟢 事件 1：回合開始（凍結時間起點）
+    // 🟢 事件 1：回合開始（加入 1.2 秒延遲避開 restart 假畫面）
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 判斷是否為 Live 局
+        // 1. 初步判斷是否為 Live 局條件
         if (!IsLive())
         {
             Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，不顯示 HUD。");
             return HookResult.Continue;
         }
 
-        Logger.LogInformation("[ServerGraphic] Live 局開始，進入凍結時間，啟動 HUD。");
-        bShowingServerGraphic = true; // 開啟 OnTick 投影
+        Logger.LogInformation("[ServerGraphic] 準備進入 Live 局，等待 1.2 秒過濾 restart 過渡期...");
+
+        // 2. 延遲 1.2 秒執行，完美避開 mp_restartgame 1 的「重啟 1 秒假畫面」
+        AddTimer(1.2f, () =>
+        {
+            // 3. 二次確認：過了 1.2 秒後，我們是否「真的」還在買槍凍結時間內？
+            var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+            if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
+            {
+                // 如果已經不在凍結時間 (代表剛剛那 1 秒只是 restart)，就直接中斷
+                if (!gameRulesProxy.GameRules.FreezePeriod)
+                {
+                    Logger.LogInformation("[ServerGraphic] 偵測到 mp_restartgame 過渡期，略過 HUD 顯示。");
+                    return;
+                }
+            }
+
+            // 4. 確定是真正的 Live 局凍結時間，正式啟動 HUD
+            Logger.LogInformation("[ServerGraphic] 真實 Live 局凍結時間確認，啟動 HUD。");
+            bShowingServerGraphic = true; // 開啟 OnTick 投影
+        });
 
         return HookResult.Continue;
     }
