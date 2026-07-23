@@ -11,7 +11,6 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("HtmlContent")]
     public string HtmlContent { get; set; } = "<img src='https://cdn.jsdelivr.net/gh/a4594865-crypto/ServerGraphic@main/images/logo2.png' width='600' height='120'>";
 
-    // 【加回來了】讓你可以自由在 .json 裡面設定想要的秒數！
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f; 
 }
@@ -19,7 +18,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.4.2"; // 恢復自訂秒數版
+    public override string ModuleVersion => "1.4.3"; // .NET 10 相容版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -62,7 +61,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             bShowingServerGraphic = true;
             _hideTimer?.Kill();
-            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic); // 測試指令也吃設定檔秒數
+            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic); 
         });
         
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
@@ -78,6 +77,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         _checkDelayTimer?.Kill();
 
+        // 延遲 0.2 秒再判定，等待伺服器參數切換完畢，避免閃現
         _checkDelayTimer = AddTimer(0.2f, () =>
         {
             if (IsWarmup() || IsPaused() || IsKnifeRound())
@@ -89,7 +89,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             bShowingServerGraphic = true;
             _hideTimer?.Kill();
 
-            // 【關鍵修改】不再強制抓 mp_freezetime，而是使用你設定檔裡的 DisplayDuration！
+            // 依照設定檔的自訂秒數來關閉圖片
             _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic);
         });
 
@@ -119,6 +119,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         _hideTimer?.Kill();
         _hideTimer = null;
+    }
+
+    #region Helpers
+    // 專為 .NET 10 / 最新 CounterStrikeSharp 修正的玩家狀態驗證
+    public static bool IsPlayerValid(CCSPlayerController? player)
+    {
+        return player != null
+            && player.IsValid
+            && !player.IsBot
+            && player.Pawn != null
+            && player.Pawn.IsValid
+            && !player.IsHLTV;
     }
 
     private bool IsWarmup()
