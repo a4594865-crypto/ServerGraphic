@@ -21,7 +21,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.4"; // 嚴格除錯：防卡圖 + 防換圖崩潰
+    public override string ModuleVersion => "1.5.5"; // 終極防線：修復 Mid-Round 全域干擾 BUG
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -45,15 +45,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
             bool isUiActive = !string.IsNullOrEmpty(_activeCenterMessage) && (Server.CurrentTime <= _centerMessageExpiration);
 
-            // 🚨 【極度致命 BUG 修正】：絕對不能寫死 _gameRules.GameRestart = false; 
-            // 這裡完全採用 LiteMatchManager 8.53 的防卡圖寫法，讓它跟隨引擎原生的 RestartRoundTime。
+            // 🚨 終極狀態管理：精準壓制黑框，絕對不干擾伺服器原生進程
             if (_gameRules != null)
             {
-                _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;
+                if (isUiActive)
+                {
+                    // 只有在「伺服器確實處於等待重啟的倒數階段」，我們才把 GameRestart 設為 false 來壓制黑框。
+                    // 這樣一來，如果在回合中段 (Mid-Round) 使用 !testhud，就不會觸發破壞性重啟狀態。
+                    // 二來，當 Server.CurrentTime 追上 RestartRoundTime 的瞬間，我們就不再壓制，確保回合能順利推進。
+                    if (_gameRules.RestartRoundTime > Server.CurrentTime)
+                    {
+                        _gameRules.GameRestart = false;
+                    }
+                }
+                // 如果 isUiActive 為 false，我們完全不碰 GameRestart，把控制權交還給引擎。
             }
 
             // ==========================================
-            // 效能跳幀處理 (只攔截發送 HTML 的消耗，不攔截上方的引擎同步)
+            // 效能跳幀處理：攔截高耗能的 HTML 發送
             int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
             if (Server.TickCount % tickInterval != 0) return;
             // ==========================================
@@ -80,7 +89,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.4)");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.5)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
@@ -99,9 +108,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void OnMapStartHandler(string mapName)
     {
-        // 🚨 嚴格除錯：換圖期間 (OnMapStart) 玩家實體正在銷毀或尚未建立
-        // 絕對不可呼叫 Utilities.GetPlayers() 進行 foreach，否則必定導致伺服器報錯！
-        // 這裡只做最安全的記憶體變數重置。
+        // 安全重置，防止換圖時抓取玩家實體導致 NullReference 崩潰
         _activeCenterMessage = "";
         _centerMessageExpiration = 0f;
         _gameRules = null;
@@ -139,7 +146,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             _activeCenterMessage = "";
             
-            // 正常遊戲期間清除畫面
             foreach (var p in Utilities.GetPlayers())
             {
                 if (IsPlayerValid(p)) p.PrintToCenterHtml(""); 
