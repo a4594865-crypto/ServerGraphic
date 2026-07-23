@@ -21,19 +21,20 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.5"; // 終極防線：修復 Mid-Round 全域干擾 BUG
+    public override string ModuleVersion => "1.5.7"; // 真理版：與 FreezePeriod 完美同步
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
 
-    private string _activeCenterMessage = "";
-    private float _centerMessageExpiration = 0f;
-
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
-    
     private CCSGameRules? _gameRules;
     private bool _gameRulesInitialized;
     private float _lastRuleCheckTime = 0f;
+
+    // 狀態驅動變數 (取代舊版的 Timer)
+    private bool _wasFreezeTime = false;
+    private bool _wasShowingGraphic = false;
+    private float _centerMessageExpiration = 0f;
+    private bool _isManualTest = false;
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
@@ -43,59 +44,77 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            bool isUiActive = !string.IsNullOrEmpty(_activeCenterMessage) && (Server.CurrentTime <= _centerMessageExpiration);
+            bool isFreezeTime = _gameRules != null && _gameRules.FreezePeriod;
+            bool isValidState = !IsWarmup() && !IsPaused() && !IsKnifeRound();
 
-            // 🚨 終極狀態管理：精準壓制黑框，絕對不干擾伺服器原生進程
-            if (_gameRules != null)
+            // 🎯 核心邏輯 1：偵測「凍結時間剛開始」的瞬間，設定圖片壽命
+            if (isFreezeTime && !_wasFreezeTime)
             {
-                if (isUiActive)
+                _centerMessageExpiration = Server.CurrentTime + Config.DisplayDuration;
+            }
+            _wasFreezeTime = isFreezeTime;
+
+            // 🎯 核心邏輯 2：判斷當下是否應該顯示 HUD
+            bool isUiActive = false;
+            if (Server.CurrentTime <= _centerMessageExpiration)
+            {
+                if (_isManualTest) 
                 {
-                    // 只有在「伺服器確實處於等待重啟的倒數階段」，我們才把 GameRestart 設為 false 來壓制黑框。
-                    // 這樣一來，如果在回合中段 (Mid-Round) 使用 !testhud，就不會觸發破壞性重啟狀態。
-                    // 二來，當 Server.CurrentTime 追上 RestartRoundTime 的瞬間，我們就不再壓制，確保回合能順利推進。
-                    if (_gameRules.RestartRoundTime > Server.CurrentTime)
-                    {
-                        _gameRules.GameRestart = false;
-                    }
+                    isUiActive = true; // 管理員打指令強制測試
                 }
-                // 如果 isUiActive 為 false，我們完全不碰 GameRestart，把控制權交還給引擎。
+                else if (isFreezeTime && isValidState)
+                {
+                    isUiActive = true; // 在凍結時間內，且狀態合法
+                }
+            }
+            else
+            {
+                _isManualTest = false; // 時間到，自動解除測試狀態
+            }
+
+            // 🚨 壓制黑框：只要圖片在顯示，且確實處於凍結時間，就壓制引擎黑框
+            if (_gameRules != null && isUiActive && isFreezeTime)
+            {
+                _gameRules.GameRestart = false;
             }
 
             // ==========================================
-            // 效能跳幀處理：攔截高耗能的 HTML 發送
+            // 效能跳幀處理 (節省伺服器 CPU)
             int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
             if (Server.TickCount % tickInterval != 0) return;
             // ==========================================
 
+            // 🎯 核心邏輯 3：發送或清理畫面
             if (isUiActive)
             {
-                if (IsPaused())
-                {
-                    StopShowingGraphic();
-                    return;
-                }
-
                 foreach (var p in Utilities.GetPlayers())
                 {
-                    if (IsPlayerValid(p)) p.PrintToCenterHtml(_activeCenterMessage);
+                    if (IsPlayerValid(p)) p.PrintToCenterHtml(Config.HtmlContent);
                 }
+                _wasShowingGraphic = true;
             }
-            else if (!string.IsNullOrEmpty(_activeCenterMessage))
+            else if (_wasShowingGraphic)
             {
-                StopShowingGraphic();
+                // 當 isUiActive 變成 false (凍結時間結束，或是 5 秒到了)，立刻清空殘影
+                foreach (var p in Utilities.GetPlayers())
+                {
+                    if (IsPlayerValid(p)) p.PrintToCenterHtml("");
+                }
+                _wasShowingGraphic = false;
             }
         });
     }
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.5)");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.7)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
         AddCommand("css_testhud", "Test HUD", (player, info) =>
         {
-            ShowHud(Config.HtmlContent, Config.DisplayDuration);
+            _isManualTest = true;
+            _centerMessageExpiration = Server.CurrentTime + Config.DisplayDuration;
         });
 
         if (hotReload)
@@ -108,18 +127,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void OnMapStartHandler(string mapName)
     {
-        // 安全重置，防止換圖時抓取玩家實體導致 NullReference 崩潰
-        _activeCenterMessage = "";
-        _centerMessageExpiration = 0f;
         _gameRules = null;
         _gameRulesInitialized = false;
         _lastRuleCheckTime = 0f;
         
-        if (_checkDelayTimer != null)
-        {
-            _checkDelayTimer.Kill();
-            _checkDelayTimer = null;
-        }
+        _wasFreezeTime = false;
+        _wasShowingGraphic = false;
+        _centerMessageExpiration = 0f;
+        _isManualTest = false;
     }
 
     private void InitializeGameRules()
@@ -132,63 +147,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         _gameRules = gameRulesProxy?.GameRules;
         _gameRulesInitialized = _gameRules != null;
-    }
-
-    private void ShowHud(string html, float duration)
-    {
-        _activeCenterMessage = html;
-        _centerMessageExpiration = Server.CurrentTime + duration;
-    }
-
-    private void StopShowingGraphic()
-    {
-        if (!string.IsNullOrEmpty(_activeCenterMessage))
-        {
-            _activeCenterMessage = "";
-            
-            foreach (var p in Utilities.GetPlayers())
-            {
-                if (IsPlayerValid(p)) p.PrintToCenterHtml(""); 
-            }
-        }
-        
-        if (_checkDelayTimer != null)
-        {
-            _checkDelayTimer.Kill();
-            _checkDelayTimer = null;
-        }
-    }
-
-    [GameEventHandler]
-    public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
-    {
-        if (_checkDelayTimer != null)
-        {
-            _checkDelayTimer.Kill();
-            _checkDelayTimer = null;
-        }
-
-        _checkDelayTimer = AddTimer(0.2f, () =>
-        {
-            _checkDelayTimer = null;
-
-            if (IsWarmup() || IsPaused() || IsKnifeRound())
-            {
-                StopShowingGraphic();
-                return;
-            }
-
-            ShowHud(Config.HtmlContent, Config.DisplayDuration);
-        });
-
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnEventRoundEnd(EventRoundEnd @event, GameEventInfo info)
-    {
-        StopShowingGraphic();
-        return HookResult.Continue;
     }
 
     #region Helpers
