@@ -18,19 +18,19 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.4.7"; // 賽事級極致優化版
+    public override string ModuleVersion => "1.5.0"; // 完美照搬 LiteMatchManager UI 架構版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
 
-    public bool bShowingServerGraphic = false;
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _hideTimer;
+    // ✅ 照抄 LiteMatchManager 的動態 UI 管理變數
+    private string _activeCenterMessage = "";
+    private float _centerMessageExpiration = 0f;
+
     private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
     
     private CCSGameRules? _gameRules;
     private bool _gameRulesInitialized;
-    
-    // 新增：用於防止 OnTick 瘋狂掃描的冷卻時間戳記
     private float _lastRuleCheckTime = 0f;
 
     public void OnConfigParsed(ServerGraphicConfig config)
@@ -41,20 +41,26 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            if (bShowingServerGraphic) 
+            // ✅ 照抄 LiteMatchManager 的「智慧型 UI 渲染與清理機制」
+            if (!string.IsNullOrEmpty(_activeCenterMessage))
             {
-                if (IsPaused())
+                if (Server.CurrentTime <= _centerMessageExpiration)
+                {
+                    // 保留賽事專用的暫停中斷判定
+                    if (IsPaused())
+                    {
+                        StopShowingGraphic();
+                        return;
+                    }
+
+                    foreach (var p in Utilities.GetPlayers())
+                    {
+                        if (IsPlayerValid(p)) p.PrintToCenterHtml(_activeCenterMessage);
+                    }
+                }
+                else
                 {
                     StopShowingGraphic();
-                    return;
-                }
-
-                foreach (var player in Utilities.GetPlayers())
-                {
-                    if (!IsPlayerValid(player))
-                        continue;
-
-                    player.PrintToCenterHtml(Config.HtmlContent);
                 }
             }
         });
@@ -68,15 +74,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         AddCommand("css_testhud", "Test HUD", (player, info) =>
         {
-            bShowingServerGraphic = true;
-            
-            if (_hideTimer != null) _hideTimer.Kill();
-            
-            // 安全的計時器寫法：自然結束時先清空指標，避免 Stop 誤殺自己
-            _hideTimer = AddTimer(Config.DisplayDuration, () => {
-                _hideTimer = null;
-                StopShowingGraphic();
-            }); 
+            ShowHud(Config.HtmlContent, Config.DisplayDuration);
         });
 
         if (hotReload)
@@ -99,13 +97,37 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         if (_gameRulesInitialized) return;
 
-        // 【致命效能修復】限制每 1 秒才去全服搜索一次，絕對不允許 1 秒 64 次的瘋狂掃描
         if (Server.CurrentTime - _lastRuleCheckTime < 1.0f) return;
         _lastRuleCheckTime = Server.CurrentTime;
 
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         _gameRules = gameRulesProxy?.GameRules;
         _gameRulesInitialized = _gameRules != null;
+    }
+
+    // ✅ 照抄 LiteMatchManager 的 ShowHud 封裝方法
+    private void ShowHud(string html, float duration)
+    {
+        _activeCenterMessage = html;
+        _centerMessageExpiration = Server.CurrentTime + duration;
+    }
+
+    private void StopShowingGraphic()
+    {
+        if (!string.IsNullOrEmpty(_activeCenterMessage))
+        {
+            _activeCenterMessage = "";
+            foreach (var p in Utilities.GetPlayers())
+            {
+                if (IsPlayerValid(p)) p.PrintToCenterHtml(""); 
+            }
+        }
+        
+        if (_checkDelayTimer != null)
+        {
+            _checkDelayTimer.Kill();
+            _checkDelayTimer = null;
+        }
     }
 
     [GameEventHandler]
@@ -127,24 +149,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 return;
             }
 
-            bShowingServerGraphic = true;
-            
-            if (_hideTimer != null) _hideTimer.Kill();
-            
-            // 安全的計時器寫法
-            _hideTimer = AddTimer(Config.DisplayDuration, () => {
-                _hideTimer = null;
-                StopShowingGraphic();
-            });
+            // 直接呼叫封裝好的 ShowHud 方法
+            ShowHud(Config.HtmlContent, Config.DisplayDuration);
         });
 
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnEventRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo info)
-    {
-        StopShowingGraphic();
         return HookResult.Continue;
     }
 
@@ -153,35 +161,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         StopShowingGraphic();
         return HookResult.Continue;
-    }
-
-    private void StopShowingGraphic()
-    {
-        if (bShowingServerGraphic)
-        {
-            foreach (var player in Utilities.GetPlayers())
-            {
-                if (IsPlayerValid(player))
-                {
-                    player.PrintToCenterHtml(""); 
-                }
-            }
-        }
-
-        bShowingServerGraphic = false;
-        
-        // 【框架報錯修復】僅在外部中斷時才執行 Kill，避免計時器自我毀滅
-        if (_checkDelayTimer != null)
-        {
-            _checkDelayTimer.Kill();
-            _checkDelayTimer = null;
-        }
-
-        if (_hideTimer != null)
-        {
-            _hideTimer.Kill();
-            _hideTimer = null;
-        }
     }
 
     #region Helpers
