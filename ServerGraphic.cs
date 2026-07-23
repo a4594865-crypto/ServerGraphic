@@ -1,3 +1,4 @@
+using System;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Timers;
@@ -34,10 +35,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        // 綁定事件 (例如回合開始或是凍結時間開始)
-        // 這裡以 EventRoundPrestart (準備階段) 為例，你可以依照需求改為 EventRoundStart
-        RegisterEventHandler<EventRoundPrestart>((@event, info) =>
+        // 【新增】手動測試指令：在伺服器或遊戲控制台輸入 css_testhud 即可手動觸發
+        AddCommand("css_testhud", "Test HUD", (player, info) =>
         {
+            Console.WriteLine("[ServerGraphic] 管理員手動觸發了 HUD 測試！");
+            if (player != null) player.PrintToChat(" \x04[ServerGraphic]\x01 正在測試發送 HUD...");
+            StartHudTimer();
+        });
+
+        // 【修改】將 EventRoundPrestart 改為 EventRoundStart，因為 Prestart 有時熱重載不會觸發
+        RegisterEventHandler<EventRoundStart>((@event, info) =>
+        {
+            Console.WriteLine("[ServerGraphic] 偵測到回合開始，準備發送 HUD！");
             StartHudTimer();
             return HookResult.Continue;
         });
@@ -45,6 +54,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         // 確保回合結束時清除畫面上殘留的計時器
         RegisterEventHandler<EventRoundEnd>((@event, info) =>
         {
+            Console.WriteLine("[ServerGraphic] 回合結束，清除 HUD 計時器。");
             StopHudTimer();
             return HookResult.Continue;
         });
@@ -86,13 +96,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void SendHudToAll()
     {
+        int count = 0; // 用來計算成功發送給幾個玩家
         foreach (var player in Utilities.GetPlayers())
         {
             // 防錯機制：確保玩家有效且非機器人
             if (player != null && player.IsValid && !player.IsBot)
             {
                 player.PrintToCenterHtml(Config.HtmlContent);
+                count++;
             }
         }
+        
+        // 【新增】在伺服器後台黑視窗印出紀錄，確認到底有沒有抓到玩家以及發送的內容
+        Console.WriteLine($"[ServerGraphic] 已發送 HTML 給 {count} 名真實玩家。發送內容: {Config.HtmlContent}");
     }
 }
