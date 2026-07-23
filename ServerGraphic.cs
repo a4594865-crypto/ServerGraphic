@@ -35,7 +35,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        // 【新增】手動測試指令：在伺服器或遊戲控制台輸入 css_testhud 即可手動觸發
+        // 手動測試指令：在伺服器或遊戲控制台輸入 css_testhud 即可手動觸發
         AddCommand("css_testhud", "Test HUD", (player, info) =>
         {
             Console.WriteLine("[ServerGraphic] 管理員手動觸發了 HUD 測試！");
@@ -43,7 +43,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             StartHudTimer();
         });
 
-        // 【修改】將 EventRoundPrestart 改為 EventRoundStart，因為 Prestart 有時熱重載不會觸發
+        // 將 EventRoundPrestart 改為 EventRoundStart
         RegisterEventHandler<EventRoundStart>((@event, info) =>
         {
             Console.WriteLine("[ServerGraphic] 偵測到回合開始，準備發送 HUD！");
@@ -100,14 +100,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         foreach (var player in Utilities.GetPlayers())
         {
-            // 1. 確保實體有效
-            if (player == null || !player.IsValid) continue;
-
-            // 2. 略過機器人與 GOTV (HLTV)
-            if (player.IsBot || player.IsHLTV) continue;
-
-            // 3. 確保玩家已經「完全連線」並進入遊戲，而不是還在讀取中
-            if (player.Connected != PlayerConnectedState.PlayerConnected) continue;
+            // 最穩定的防錯機制：確保實體有效，且「不是機器人」、「不是 GOTV/HLTV」
+            if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) continue;
 
             // 發送 HTML
             player.PrintToCenterHtml(Config.HtmlContent);
