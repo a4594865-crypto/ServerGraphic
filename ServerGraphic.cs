@@ -94,15 +94,17 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
+    // 這裡替換成了最新版 CSS API 支援且最穩定的寫法，解決了編譯報錯
     public static bool IsPlayerValid(CCSPlayerController? player)
     {
         return player != null
             && player.IsValid
             && !player.IsBot
-            && player.Pawn != null
-            && player.Pawn.IsValid
-            && player.Connected == PlayerConnectedState.PlayerConnected
-            && !player.IsHLTV;
+            && !player.IsHLTV
+            && player.PlayerPawn != null
+            && player.PlayerPawn.IsValid
+            && player.PlayerPawn.Value != null
+            && player.PlayerPawn.Value.IsValid;
     }
     #endregion
 }
