@@ -14,7 +14,6 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f; 
 
-    // ✅ 改用原生的 Tick 區間來控制 OnTick 刷新率 (建議值: 4, 8, 16, 32, 64)
     [JsonPropertyName("UpdateTicks")]
     public int UpdateTicks { get; set; } = 8; 
 }
@@ -22,7 +21,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.2"; // 原生 Tick 跳幀版 + 消除黑框
+    public override string ModuleVersion => "1.5.3"; // 修正跳幀邏輯：徹底壓制黑框版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -42,54 +41,56 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         RegisterListener<Listeners.OnTick>(() =>
         {
-            // ✅ 【極致效能優化】：使用原生 Tick 取餘數來跳幀 (4, 8, 16, 32, 64)
-            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-            if (Server.TickCount % tickInterval != 0) return;
-
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            bool shouldFreezeUI = false; 
+            // 先判斷當前時間點，是否「應該要顯示 UI」
+            bool isUiActive = !string.IsNullOrEmpty(_activeCenterMessage) && (Server.CurrentTime <= _centerMessageExpiration);
+            bool isPaused = IsPaused();
 
-            if (!string.IsNullOrEmpty(_activeCenterMessage))
-            {
-                if (Server.CurrentTime <= _centerMessageExpiration)
-                {
-                    if (IsPaused())
-                    {
-                        StopShowingGraphic();
-                        return;
-                    }
-
-                    shouldFreezeUI = true; 
-                    foreach (var p in Utilities.GetPlayers())
-                    {
-                        if (IsPlayerValid(p)) p.PrintToCenterHtml(_activeCenterMessage);
-                    }
-                }
-                else
-                {
-                    StopShowingGraphic();
-                }
-            }
-
-            // ✅ 【消除幽靈黑框】：智慧控制引擎 GameRestart
+            // 🚨 步驟一：【消除黑框的底層壓制】
+            // 這個區塊必須「每個 Tick」都執行，絕對不能跳幀，否則引擎黑框會趁虛而入！
             if (_gameRules != null)
             {
-                if (shouldFreezeUI)
+                if (isUiActive && !isPaused)
                 {
                     _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;
                 }
                 else
                 {
-                    _gameRules.GameRestart = false; 
+                    _gameRules.GameRestart = false; // 強制將黑框關閉
                 }
+            }
+
+            // ==========================================
+            // 🚨 步驟二：【發送 HTML 封包給玩家】 (這非常耗 CPU，所以在這裡攔截跳幀)
+            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+            if (Server.TickCount % tickInterval != 0) return;
+            // ==========================================
+
+            if (isUiActive)
+            {
+                if (isPaused)
+                {
+                    StopShowingGraphic();
+                    return;
+                }
+
+                foreach (var p in Utilities.GetPlayers())
+                {
+                    if (IsPlayerValid(p)) p.PrintToCenterHtml(_activeCenterMessage);
+                }
+            }
+            else if (!string.IsNullOrEmpty(_activeCenterMessage))
+            {
+                // 時間到了，呼叫清理方法把殘影洗掉
+                StopShowingGraphic();
             }
         });
     }
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.2)");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.3)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
@@ -143,7 +144,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
         }
         
-        // 確保引擎黑框徹底被強制消除
+        // 保險機制：在主動關閉時，立刻強制消除黑框
         if (_gameRules != null)
         {
             _gameRules.GameRestart = false;
