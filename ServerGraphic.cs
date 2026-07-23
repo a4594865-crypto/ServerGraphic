@@ -21,51 +21,52 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("ImageHeight")]
     public int ImageHeight { get; set; } = 120;
-    
-    // 💡 已經刪除 DisplayDuration 和 UpdateTicks，交給引擎原生淡出，配置檔更乾淨
+
+    // 恢復秒數控制
+    [JsonPropertyName("DisplayDuration")]
+    public float DisplayDuration { get; set; } = 5.0f;
+
+    // 恢復跳幀頻率，節省 CPU
+    [JsonPropertyName("UpdateTicks")]
+    public int UpdateTicks { get; set; } = 8;
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.5"; // 升級為原生淡出、完美防刀局版
+    public override string ModuleVersion => "1.0.6"; // 終極合體版：OnTick 顯示 + 空白字串殺黑框
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
+    public bool bShowingServerGraphic = false;
+    private string currentImageHtml = "";
 
     public override void Load(bool hotReload)
     {
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
-        if (hotReload)
-        {
-            Console.WriteLine("[INFO] [CS2ServerGraphic] hotReload +++ ");
-            Console.WriteLine("[INFO] [CS2ServerGraphic] hotReload --- ");
-        }
-
+        RegisterListener<Listeners.OnMapStart>(map => bShowingServerGraphic = false);
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
     }
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
-        // 💡 已經砍掉 OnTick 狂刷邏輯，完全解放伺服器 CPU
-    }
+        currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
 
-    public void GetServerGraphicUrl()
-    {
-        Task.Run(async () =>
+        // 🚨 投影機機制：HTML 必須靠 OnTick 才能維持在畫面上不被引擎吃掉
+        RegisterListener<Listeners.OnTick>(() =>
         {
-            try
+            if (!bShowingServerGraphic) return;
+
+            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+            if (Server.TickCount % tickInterval != 0) return;
+
+            foreach (var player in Utilities.GetPlayers())
             {
-                string? response = await Utils.HttpGetAsync("modalFeedbackEvent");
-                if (response != null)
+                if (IsPlayerValid(player))
                 {
-                    Logger.LogInformation(response);
+                    player.PrintToCenterHtml(currentImageHtml);
                 }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"后台请求失败: {ex.Message}");
             }
         });
     }
@@ -73,31 +74,34 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 1. 判斷是否為 Live 局
+        // 1. 攔截暖身與刀局
         if (!IsLive())
         {
-            Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，略過 HUD 顯示。");
+            Logger.LogInformation("[ServerGraphic] 偵測為非 Live 局 (暖身/刀局)，略過 HUD。");
             return HookResult.Continue;
         }
 
-        Logger.LogInformation("[ServerGraphic] 偵測為 Live 局！準備延遲發送 HUD...");
+        Logger.LogInformation($"[ServerGraphic] Live 局開始！啟動 HUD 投影 {Config.DisplayDuration} 秒。");
+        
+        // 2. 開啟投影機 (啟動 OnTick)
+        bShowingServerGraphic = true;
 
-        string imageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
-
-        // 🚨 核心修復：延遲 0.5 秒發送！
-        // 避開回合開始瞬間，CS2 引擎強制清空畫面的動作
-        AddTimer(0.5f, () =>
+        // 3. 5 秒後強制關閉投影，並使出「空白文字殺黑框」大絕招
+        AddTimer(Config.DisplayDuration, () =>
         {
+            bShowingServerGraphic = false; // 停止 OnTick
+            
             foreach (var player in Utilities.GetPlayers())
             {
                 if (IsPlayerValid(player))
                 {
-                    player.PrintToCenterHtml(imageHtml);
+                    // 🚨 關鍵：發送普通文字的「空白」，強迫引擎把 HTML 的黑框收回！
+                    player.PrintToCenter(" "); 
                 }
             }
-            Logger.LogInformation("[ServerGraphic] HUD 圖片發送成功！");
+            Logger.LogInformation("[ServerGraphic] 顯示結束，已發送空白文字徹底清除黑框。");
         });
-        
+
         return HookResult.Continue;
     }
 
@@ -116,36 +120,29 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private bool IsLive()
     {
-        // 1. 攔截內建暖身時間
+        // 檢查 1：是否為內建暖身時間
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
         {
-            if (gameRulesProxy.GameRules.WarmupPeriod)
-            {
-                return false;
-            }
+            if (gameRulesProxy.GameRules.WarmupPeriod) return false;
         }
 
-        // 2. 對準你的 CFG：攔截 mp_maxmoney 0
+        // 檢查 2：防呆讀取你的 mp_maxmoney 0
         var maxMoney = ConVar.Find("mp_maxmoney");
         if (maxMoney != null)
         {
-            // 避免型別報錯，int 和 float 都嘗試抓取
             try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }
-            try { if (maxMoney.GetPrimitiveValue<float>() == 0f) return false; } catch { }
         }
 
-        // 3. 對準你的 CFG：攔截 mp_give_player_c4 0
+        // 檢查 3：防呆讀取你的 mp_give_player_c4 0
         var giveC4 = ConVar.Find("mp_give_player_c4");
         if (giveC4 != null)
         {
-            // C4 常常被底層當作 bool 處理，所以兩者都相容
             try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }
-            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { } 
+            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { }
         }
 
-        // 4. 對準你的 CFG (終極保險)：攔截 mp_free_armor 1
-        // 正規競技局買甲要錢(0)，只有刀局 CFG 裡會設定免費給甲(1)
+        // 檢查 4：防呆讀取你的 mp_free_armor 1 (最準確的刀局特徵)
         var freeArmor = ConVar.Find("mp_free_armor");
         if (freeArmor != null)
         {
@@ -153,7 +150,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
         }
 
-        return true; // 如果以上都沒攔截到，才判定為真正的 Live 局
+        return true;
     }
     #endregion
 }
