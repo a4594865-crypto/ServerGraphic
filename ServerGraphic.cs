@@ -18,7 +18,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.4.5"; // 採用 LiteMatch 的 GameRules 快取優化版
+    public override string ModuleVersion => "1.4.7"; // 賽事級極致優化版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -27,9 +27,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private CounterStrikeSharp.API.Modules.Timers.Timer? _hideTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
     
-    // 借鑒 LiteMatchManager 的快取機制，極大化提升 OnTick 效能
     private CCSGameRules? _gameRules;
     private bool _gameRulesInitialized;
+    
+    // 新增：用於防止 OnTick 瘋狂掃描的冷卻時間戳記
+    private float _lastRuleCheckTime = 0f;
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
@@ -37,12 +39,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         RegisterListener<Listeners.OnTick>(() =>
         {
-            // 每一幀檢查：如果還沒抓過遊戲規則，才去抓一次
             if (!_gameRulesInitialized) InitializeGameRules();
 
             if (bShowingServerGraphic) 
             {
-                // 現在 IsPaused() 直接讀取記憶體快取，瞬間完成，0 效能負擔！
                 if (IsPaused())
                 {
                     StopShowingGraphic();
@@ -69,14 +69,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         AddCommand("css_testhud", "Test HUD", (player, info) =>
         {
             bShowingServerGraphic = true;
-            _hideTimer?.Kill();
-            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic); 
+            
+            if (_hideTimer != null) _hideTimer.Kill();
+            
+            // 安全的計時器寫法：自然結束時先清空指標，避免 Stop 誤殺自己
+            _hideTimer = AddTimer(Config.DisplayDuration, () => {
+                _hideTimer = null;
+                StopShowingGraphic();
+            }); 
         });
 
-        // 如果是熱重載 (Hot Reload)，立刻初始化規則
         if (hotReload)
         {
-            InitializeGameRules();
+            Server.NextFrame(InitializeGameRules);
         }
         
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
@@ -85,16 +90,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void OnMapStartHandler(string mapName)
     {
         StopShowingGraphic();
-        
-        // 借鑒 LiteMatchManager：換地圖時清空快取，讓 OnTick 重新抓取
         _gameRules = null;
         _gameRulesInitialized = false;
+        _lastRuleCheckTime = 0f;
     }
 
-    // 將全服搜索獨立出來，只執行一次
     private void InitializeGameRules()
     {
         if (_gameRulesInitialized) return;
+
+        // 【致命效能修復】限制每 1 秒才去全服搜索一次，絕對不允許 1 秒 64 次的瘋狂掃描
+        if (Server.CurrentTime - _lastRuleCheckTime < 1.0f) return;
+        _lastRuleCheckTime = Server.CurrentTime;
+
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         _gameRules = gameRulesProxy?.GameRules;
         _gameRulesInitialized = _gameRules != null;
@@ -103,10 +111,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        _checkDelayTimer?.Kill();
+        if (_checkDelayTimer != null)
+        {
+            _checkDelayTimer.Kill();
+            _checkDelayTimer = null;
+        }
 
         _checkDelayTimer = AddTimer(0.2f, () =>
         {
+            _checkDelayTimer = null;
+
             if (IsWarmup() || IsPaused() || IsKnifeRound())
             {
                 StopShowingGraphic();
@@ -115,8 +129,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
             bShowingServerGraphic = true;
             
-            _hideTimer?.Kill();
-            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic);
+            if (_hideTimer != null) _hideTimer.Kill();
+            
+            // 安全的計時器寫法
+            _hideTimer = AddTimer(Config.DisplayDuration, () => {
+                _hideTimer = null;
+                StopShowingGraphic();
+            });
         });
 
         return HookResult.Continue;
@@ -138,13 +157,31 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void StopShowingGraphic()
     {
+        if (bShowingServerGraphic)
+        {
+            foreach (var player in Utilities.GetPlayers())
+            {
+                if (IsPlayerValid(player))
+                {
+                    player.PrintToCenterHtml(""); 
+                }
+            }
+        }
+
         bShowingServerGraphic = false;
         
-        _checkDelayTimer?.Kill();
-        _checkDelayTimer = null;
+        // 【框架報錯修復】僅在外部中斷時才執行 Kill，避免計時器自我毀滅
+        if (_checkDelayTimer != null)
+        {
+            _checkDelayTimer.Kill();
+            _checkDelayTimer = null;
+        }
 
-        _hideTimer?.Kill();
-        _hideTimer = null;
+        if (_hideTimer != null)
+        {
+            _hideTimer.Kill();
+            _hideTimer = null;
+        }
     }
 
     #region Helpers
@@ -153,20 +190,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return player != null
             && player.IsValid
             && !player.IsBot
-            && player.Pawn != null
-            && player.Pawn.IsValid
-            && !player.IsHLTV;
+            && !player.IsHLTV
+            && player.PlayerPawn != null
+            && player.PlayerPawn.IsValid
+            && player.PlayerPawn.Value != null
+            && player.PlayerPawn.Value.IsValid;
     }
 
     private bool IsWarmup()
     {
-        // 直接使用快取的 _gameRules，不用再搜尋了！
         return _gameRules != null && _gameRules.WarmupPeriod;
     }
 
     private bool IsPaused()
     {
-        // 直接使用快取的 _gameRules，不用再搜尋了！
         if (_gameRules != null)
         {
             return _gameRules.MatchWaitingForResume || 
