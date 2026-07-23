@@ -13,14 +13,15 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 15.0f; // 配合正常 5v5 的 15 秒凍結時間
 
+    // 【修改重點】將刷新頻率改為 1.2 秒，配合 CS2 內建淡入動畫，創造完美的「呼吸感」
     [JsonPropertyName("RefreshInterval")]
-    public float RefreshInterval { get; set; } = 0.15f; 
+    public float RefreshInterval { get; set; } = 1.2f; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.3.0";
+    public override string ModuleVersion => "1.3.1"; // 呼吸感微調版
 
     public ServerGraphicConfig Config { get; set; }
     
@@ -78,7 +79,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     /// <summary>
-    /// 檢查是否為暫停狀態 (支援 MatchZy 的 .pause 與 .tech)
+    /// 檢查是否為暫停狀態 (支援 MatchZy 的 .pause (.tech) 與 CS2 原生 .P 暫停)
     /// </summary>
     private bool IsPaused()
     {
@@ -86,7 +87,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         if (gameRules != null)
         {
             // MatchWaitingForResume = mp_pause_match (技術暫停/管理員暫停)
-            // TerroristTimeOutActive / CTTimeOutActive = T或CT的隊伍暫停
+            // TerroristTimeOutActive / CTTimeOutActive = T或CT的隊伍暫停 (.P 觸發)
             return gameRules.MatchWaitingForResume || 
                    gameRules.TerroristTimeOutActive || 
                    gameRules.CTTimeOutActive;
