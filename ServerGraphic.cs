@@ -5,6 +5,7 @@ using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
 using HttpUtils;
+using System.Linq;
 
 namespace ServerGraphic;
 
@@ -12,16 +13,29 @@ public class ServerGraphicConfig : BasePluginConfig
 {
     [JsonPropertyName("Image")]
     public string Image { get; set; } = "LINKTOIMAGE";
+
+    [JsonPropertyName("ImageWidth")]
+    public int ImageWidth { get; set; } = 600;
+
+    [JsonPropertyName("ImageHeight")]
+    public int ImageHeight { get; set; } = 120;
+
+    // 🚨 新增：顯示秒數設定 (預設 5.0 秒)
+    [JsonPropertyName("DisplayDuration")]
+    public float DisplayDuration { get; set; } = 5.0f;
+
+    // 🚨 新增：OnTick 刷新頻率 (預設 8，代表每 8 個 Tick 刷新一次，節省 CPU)
+    [JsonPropertyName("UpdateTicks")]
+    public int UpdateTicks { get; set; } = 8;
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.2";
+    public override string ModuleVersion => "1.0.4"; // 加入顯示秒數與 OnTick 刷新設定
     public override string ModuleAuthor => "unfortunate";
-    public int iMpFreezeTimemp;
+    
     public bool bShowingServerGraphic = false;
-
     public ServerGraphicConfig Config { get; set; } = new();
 
     public override void Load(bool hotReload)
@@ -36,19 +50,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
     }
+
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
         RegisterListener<Listeners.OnTick>(() =>
         {
-            if (bShowingServerGraphic) {
+            if (bShowingServerGraphic) 
+            {
+                // 🚨 新增：跳幀邏輯 (避免每幀發送導致效能浪費)
+                int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+                if (Server.TickCount % tickInterval != 0) return;
+
                 foreach (var player in Utilities.GetPlayers())
                 {
                     if (!IsPlayerValid(player))
                         continue;
 
-
-                    player.PrintToCenterHtml($"<img src='{Config.Image}'>");
+                    player.PrintToCenterHtml($"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>");
                 }
             }
         });
@@ -68,7 +87,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 string? response = await Utils.HttpGetAsync("modalFeedbackEvent");
                 if (response != null)
                 {
-                    // 处理响应（注意线程安全）
                     Logger.LogInformation(response);
                 }
             }
@@ -82,19 +100,35 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        iMpFreezeTimemp = ConVar.Find("mp_freezetime")!.GetPrimitiveValue<int>();
-        Logger.LogInformation("[OnEventRoundStart] Round has started with iMpFreezeTimemp: {iMpFreezeTimemp}", iMpFreezeTimemp);
+        if (!IsLive())
+        {
+            return HookResult.Continue;
+        }
+
+        Logger.LogInformation($"[OnEventRoundStart] Round started. HUD will show for {Config.DisplayDuration} seconds.");
         bShowingServerGraphic = true;
-        AddTimer(iMpFreezeTimemp, () =>
+        
+        // 🚨 修改：使用設定檔中的秒數 (Config.DisplayDuration)
+        AddTimer(Config.DisplayDuration, () =>
         {
             bShowingServerGraphic = false;
-            Logger.LogInformation("[OnEventRoundStart] mp_freezetime ended");
+            
+            // 🚨 新增：時間到的瞬間，主動清空所有玩家的畫面，避免圖片殘留
+            foreach (var player in Utilities.GetPlayers())
+            {
+                if (IsPlayerValid(player))
+                {
+                    player.PrintToCenterHtml(""); 
+                }
+            }
+            
+            Logger.LogInformation("[OnEventRoundStart] Display duration ended, HUD cleared.");
         });
+        
         return HookResult.Continue;
     }
 
     #region Helpers
-    // 這裡替換成了最新版 CSS API 支援且最穩定的寫法，解決了編譯報錯
     public static bool IsPlayerValid(CCSPlayerController? player)
     {
         return player != null
@@ -105,6 +139,30 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             && player.PlayerPawn.IsValid
             && player.PlayerPawn.Value != null
             && player.PlayerPawn.Value.IsValid;
+    }
+
+    private bool IsLive()
+    {
+        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+        if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
+        {
+            if (gameRulesProxy.GameRules.WarmupPeriod)
+            {
+                return false;
+            }
+        }
+
+        var maxMoneyConVar = ConVar.Find("mp_maxmoney");
+        if (maxMoneyConVar != null)
+        {
+            try 
+            { 
+                if (maxMoneyConVar.GetPrimitiveValue<int>() == 0) return false; 
+            } 
+            catch { }
+        }
+
+        return true;
     }
     #endregion
 }
