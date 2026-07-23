@@ -13,19 +13,25 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f; 
+
+    // ✅ 新增：控制 OnTick 的刷新頻率 (單位:秒)，預設 0.1 秒
+    [JsonPropertyName("UpdateInterval")]
+    public float UpdateInterval { get; set; } = 0.1f; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.5.0"; // 完美照搬 LiteMatchManager UI 架構版
+    public override string ModuleVersion => "1.5.1"; // 消除殘影黑框 + OnTick刷新率控制
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
 
-    // ✅ 照抄 LiteMatchManager 的動態 UI 管理變數
     private string _activeCenterMessage = "";
     private float _centerMessageExpiration = 0f;
+
+    // ✅ 新增：用於控制 OnTick 更新率的計時變數
+    private float _lastTickTime = 0f;
 
     private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
     
@@ -41,18 +47,23 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (!_gameRulesInitialized) InitializeGameRules();
 
-            // ✅ 照抄 LiteMatchManager 的「智慧型 UI 渲染與清理機制」
+            // ✅ 【效能優化】：套用設定檔的更新率，時間沒到直接跳過，不佔用 CPU
+            if (Server.CurrentTime - _lastTickTime < Config.UpdateInterval) return;
+            _lastTickTime = Server.CurrentTime;
+
+            bool shouldFreezeUI = false; // 照抄你的 LiteMatchManager 判定變數[cite: 2]
+
             if (!string.IsNullOrEmpty(_activeCenterMessage))
             {
                 if (Server.CurrentTime <= _centerMessageExpiration)
                 {
-                    // 保留賽事專用的暫停中斷判定
                     if (IsPaused())
                     {
                         StopShowingGraphic();
                         return;
                     }
 
+                    shouldFreezeUI = true; 
                     foreach (var p in Utilities.GetPlayers())
                     {
                         if (IsPlayerValid(p)) p.PrintToCenterHtml(_activeCenterMessage);
@@ -63,12 +74,25 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                     StopShowingGraphic();
                 }
             }
+
+            // ✅ 【關鍵修復】：完全照抄 LiteMatchManager 的 GameRestart 開關來消除幽靈黑框[cite: 2]
+            if (_gameRules != null)
+            {
+                if (shouldFreezeUI)
+                {
+                    _gameRules.GameRestart = _gameRules.RestartRoundTime < Server.CurrentTime;[cite: 2]
+                }
+                else
+                {
+                    _gameRules.GameRestart = false;[cite: 2]
+                }
+            }
         });
     }
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ (v1.5.1)");
         
         RegisterListener<Listeners.OnMapStart>(OnMapStartHandler);
 
@@ -105,7 +129,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         _gameRulesInitialized = _gameRules != null;
     }
 
-    // ✅ 照抄 LiteMatchManager 的 ShowHud 封裝方法
     private void ShowHud(string html, float duration)
     {
         _activeCenterMessage = html;
@@ -121,6 +144,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             {
                 if (IsPlayerValid(p)) p.PrintToCenterHtml(""); 
             }
+        }
+        
+        // 保險機制：在主動關閉時，立刻強制消除黑框
+        if (_gameRules != null)
+        {
+            _gameRules.GameRestart = false;
         }
         
         if (_checkDelayTimer != null)
@@ -149,7 +178,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 return;
             }
 
-            // 直接呼叫封裝好的 ShowHud 方法
             ShowHud(Config.HtmlContent, Config.DisplayDuration);
         });
 
