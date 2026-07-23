@@ -10,20 +10,23 @@ public class ServerGraphicConfig : BasePluginConfig
 {
     [JsonPropertyName("HtmlContent")]
     public string HtmlContent { get; set; } = "<img src='https://cdn.jsdelivr.net/gh/a4594865-crypto/ServerGraphic@main/images/logo2.png' width='600' height='120'>";
+
+    // 【加回來了】讓你可以自由在 .json 裡面設定想要的秒數！
+    [JsonPropertyName("DisplayDuration")]
+    public float DisplayDuration { get; set; } = 5.0f; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.4.1"; // 防閃現延遲判定版
+    public override string ModuleVersion => "1.4.2"; // 恢復自訂秒數版
     public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
 
-    public int iMpFreezeTimemp;
     public bool bShowingServerGraphic = false;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _hideTimer;
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer; // 新增延遲判定計時器
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _checkDelayTimer;
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
@@ -59,7 +62,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             bShowingServerGraphic = true;
             _hideTimer?.Kill();
-            _hideTimer = AddTimer(5.0f, StopShowingGraphic); 
+            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic); // 測試指令也吃設定檔秒數
         });
         
         Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
@@ -75,21 +78,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         _checkDelayTimer?.Kill();
 
-        // 【關鍵修改】延遲 0.2 秒再判定，等待 MatchZy 的 mp_restartgame 1 跑完，避免參數切換時產生「閃現」
         _checkDelayTimer = AddTimer(0.2f, () =>
         {
-            // 如果 0.2 秒後確認是 暖身、暫停 或 刀局，直接中斷不顯示
             if (IsWarmup() || IsPaused() || IsKnifeRound())
             {
                 StopShowingGraphic();
                 return;
             }
 
-            iMpFreezeTimemp = ConVar.Find("mp_freezetime")!.GetPrimitiveValue<int>();
-            
             bShowingServerGraphic = true;
             _hideTimer?.Kill();
-            _hideTimer = AddTimer(iMpFreezeTimemp, StopShowingGraphic);
+
+            // 【關鍵修改】不再強制抓 mp_freezetime，而是使用你設定檔裡的 DisplayDuration！
+            _hideTimer = AddTimer(Config.DisplayDuration, StopShowingGraphic);
         });
 
         return HookResult.Continue;
@@ -154,7 +155,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         try
         {
-            // 1. 檢查 C4 (你設定檔裡的 mp_give_player_c4 0)
             var giveC4ConVar = ConVar.Find("mp_give_player_c4");
             if (giveC4ConVar != null)
             {
@@ -162,7 +162,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 try { if (giveC4ConVar.GetPrimitiveValue<int>() == 0) return true; } catch { }
             }
 
-            // 2. 【新增】檢查最大金錢 (你設定檔裡的 mp_maxmoney 0)
             var maxMoneyConVar = ConVar.Find("mp_maxmoney");
             if (maxMoneyConVar != null)
             {
