@@ -97,17 +97,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void SendHudToAll()
     {
         int count = 0; // 用來計算成功發送給幾個玩家
+        
         foreach (var player in Utilities.GetPlayers())
         {
-            // 防錯機制：確保玩家有效且非機器人
-            if (player != null && player.IsValid && !player.IsBot)
-            {
-                player.PrintToCenterHtml(Config.HtmlContent);
-                count++;
-            }
+            // 1. 確保實體有效
+            if (player == null || !player.IsValid) continue;
+
+            // 2. 略過機器人與 GOTV (HLTV)
+            if (player.IsBot || player.IsHLTV) continue;
+
+            // 3. 確保玩家已經「完全連線」並進入遊戲，而不是還在讀取中
+            if (player.Connected != PlayerConnectedState.PlayerConnected) continue;
+
+            // 發送 HTML
+            player.PrintToCenterHtml(Config.HtmlContent);
+            count++;
         }
         
-        // 【新增】在伺服器後台黑視窗印出紀錄，確認到底有沒有抓到玩家以及發送的內容
+        // 在伺服器後台黑視窗印出紀錄，確認到底有沒有抓到玩家以及發送的內容
         Console.WriteLine($"[ServerGraphic] 已發送 HTML 給 {count} 名真實玩家。發送內容: {Config.HtmlContent}");
     }
 }
