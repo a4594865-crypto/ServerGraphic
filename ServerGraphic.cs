@@ -10,10 +10,11 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("HtmlContent")]
     public string HtmlContent { get; set; } = "<img src='https://cdn.jsdelivr.net/gh/a4594865-crypto/ServerGraphic@main/images/logo2.png' width='600' height='120'>";
 
+    // 【修改】預設改為你習慣的 5 秒
     [JsonPropertyName("DisplayDuration")]
-    public float DisplayDuration { get; set; } = 15.0f; // 配合正常 5v5 的 15 秒凍結時間
+    public float DisplayDuration { get; set; } = 5.0f; 
 
-    // 【修改重點】將刷新頻率改為 1.2 秒，配合 CS2 內建淡入動畫，創造完美的「呼吸感」
+    // 呼吸感刷新頻率
     [JsonPropertyName("RefreshInterval")]
     public float RefreshInterval { get; set; } = 1.2f; 
 }
@@ -21,7 +22,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic_Optimized";
-    public override string ModuleVersion => "1.3.1"; // 呼吸感微調版
+    public override string ModuleVersion => "1.3.2";
 
     public ServerGraphicConfig Config { get; set; }
     
@@ -69,25 +70,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         });
     }
 
-    /// <summary>
-    /// 檢查是否為暖身階段
-    /// </summary>
     private bool IsWarmup()
     {
         var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
         return gameRules != null && gameRules.WarmupPeriod;
     }
 
-    /// <summary>
-    /// 檢查是否為暫停狀態 (支援 MatchZy 的 .pause (.tech) 與 CS2 原生 .P 暫停)
-    /// </summary>
     private bool IsPaused()
     {
         var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
         if (gameRules != null)
         {
-            // MatchWaitingForResume = mp_pause_match (技術暫停/管理員暫停)
-            // TerroristTimeOutActive / CTTimeOutActive = T或CT的隊伍暫停 (.P 觸發)
+            // 支援 mp_pause_match (技術暫停) 與 .P 觸發的隊伍暫停
             return gameRules.MatchWaitingForResume || 
                    gameRules.TerroristTimeOutActive || 
                    gameRules.CTTimeOutActive;
@@ -106,9 +100,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             _elapsedTime += Config.RefreshInterval;
 
-            // 觸發兩個條件之一就會關閉圖片：
-            // 1. 顯示時間超過設定的 DisplayDuration (預設 15 秒)
-            // 2. 偵測到遊戲被暫停
+            // 顯示滿 5 秒或中途被打 .P 暫停，就立刻停止
             if (_elapsedTime >= Config.DisplayDuration || IsPaused())
             {
                 StopHudTimer();
