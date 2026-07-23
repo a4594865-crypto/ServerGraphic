@@ -121,18 +121,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         _hideTimer = null;
     }
 
-    #region Helpers
-    public static bool IsPlayerValid(CCSPlayerController? player)
-    {
-        return player != null
-            && player.IsValid
-            && !player.IsBot
-            && player.Pawn != null
-            && player.Pawn.IsValid
-            && player.Connected == PlayerConnectedState.PlayerConnected
-            && !player.IsHLTV;
-    }
-
     private bool IsWarmup()
     {
         var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
