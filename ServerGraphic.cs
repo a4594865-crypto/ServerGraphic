@@ -31,7 +31,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.9"; // 升級版本號以供辨識
+    public override string ModuleVersion => "1.0.11"; // 升級版本號以供辨識
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -47,7 +47,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         Config = config;
         
-        // 【修正 1】：改為使用 CSS style 屬性，確保 Panorama UI 能正確鎖定圖片比例
+        // 【修正】：改為使用 CSS style 屬性，確保 Panorama UI 能正確鎖定圖片比例
         currentImageHtml = $"<img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'>";
 
         RegisterListener<Listeners.OnTick>(() =>
@@ -71,10 +71,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        // 【修正】：將 IsLive() 移進 0.5 秒的 Timer 內。
+        // 讓伺服器與比賽插件有足夠時間處理刀局設定，徹底解決第一局誤判！
         AddTimer(0.5f, () =>
         {
-            // 【修正 2】：將 IsLive() 移進 Timer 內。
-            // 讓伺服器與比賽插件有 0.5 秒的時間處理刀局 C4 與護甲設定，徹底解決第一局誤判！
             if (!IsLive())
             {
                 return;
@@ -104,28 +104,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-    // 🟢 事件 2：玩家重生（解決離線重進或中途加入的殘留問題）
-    [GameEventHandler]
-    public HookResult OnEventPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-
-        // 【修正 3】：如果玩家有效，且當前「不是」顯示 HUD 的時間
-        // 就發送空字串，徹底清空該玩家剛連線時，伺服器塞給他的殘留記憶
-        if (IsPlayerValid(player) && !bShowingServerGraphic)
-        {
-            player.PrintToCenterHtml("");
-        }
-
-        return HookResult.Continue;
-    }
-
-    // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
+   // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
     private void CloseHUD()
     {
         // 僅關閉布林值，讓 OnTick 停止每秒重新投影圖片
         bShowingServerGraphic = false; 
 
+        // 這裡不再使用 foreach 去發送任何字串
         // 交給 CS2 引擎自己把圖片跟黑框一起平滑淡出
     }
 
@@ -168,6 +153,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }
             try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
+        }
+
+        // 【新增】：檢查 CT 預設副武器是否被清空 (刀局特徵)
+        var ctSecondary = ConVar.Find("mp_ct_default_secondary");
+        if (ctSecondary != null)
+        {
+            try { if (string.IsNullOrEmpty(ctSecondary.GetPrimitiveValue<string>())) return false; } catch { }
+        }
+
+        // 【新增】：檢查 T 預設副武器是否被清空 (刀局特徵)
+        var tSecondary = ConVar.Find("mp_t_default_secondary");
+        if (tSecondary != null)
+        {
+            try { if (string.IsNullOrEmpty(tSecondary.GetPrimitiveValue<string>())) return false; } catch { }
         }
 
         return true;
