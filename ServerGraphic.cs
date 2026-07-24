@@ -46,7 +46,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
-        currentImageHtml = $"<img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'>";
+        currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
 
         RegisterListener<Listeners.OnTick>(() =>
         {
