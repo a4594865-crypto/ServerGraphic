@@ -74,7 +74,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             return HookResult.Continue;
         }
 
-        AddTimer(1.2f, () =>
+        AddTimer(0.5f, () =>
         {
             var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
             if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
