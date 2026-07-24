@@ -6,6 +6,8 @@ using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
 using System.Linq;
 using System;
+// 新增引入 Timers 模組
+using CounterStrikeSharp.API.Modules.Timers; 
 
 namespace ServerGraphic;
 
@@ -23,7 +25,6 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("UpdateTicks")]
     public int UpdateTicks { get; set; } = 8;
 
-    // 新增：自定義顯示秒數 (例如設定為 5 秒)
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f;
 }
@@ -31,23 +32,31 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.11"; // 升級版本號以供辨識
+    public override string ModuleVersion => "1.0.12"; // 升級為 1.0.12 (修復計時器重疊)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
 
+    // 【新增】：用來記錄並管理正在運行的計時器，避免跨回合干擾
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
+
     public override void Load(bool hotReload)
     {
-        RegisterListener<Listeners.OnMapStart>(map => bShowingServerGraphic = false);
+        RegisterListener<Listeners.OnMapStart>(map => 
+        {
+            bShowingServerGraphic = false;
+            // 換圖時也把計時器清掉最安全
+            ClearAllTimers();
+        });
     }
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
         
-        // 【修正】：改為使用 CSS style 屬性，確保 Panorama UI 能正確鎖定圖片比例
         currentImageHtml = $"<img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'>";
 
         RegisterListener<Listeners.OnTick>(() =>
@@ -67,13 +76,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         });
     }
 
-    // 🟢 事件 1：回合開始（保留過濾假畫面的機制）
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 【修正】：將 IsLive() 移進 0.5 秒的 Timer 內。
-        // 讓伺服器與比賽插件有足夠時間處理刀局設定，徹底解決第一局誤判！
-        AddTimer(0.5f, () =>
+        // 【核心修復】：回合一開始，立刻砍掉任何可能還在背景跑的舊回合計時器
+        ClearAllTimers();
+
+        // 將 0.5 秒的延遲計時器存起來
+        _delayTimer = AddTimer(0.5f, () =>
         {
             if (!IsLive())
             {
@@ -91,8 +101,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
             bShowingServerGraphic = true;
 
-            // 【新增核心邏輯】：依照設定的秒數，時間到自動關閉 HUD
-            AddTimer(Config.DisplayDuration, () =>
+            // 將關閉 HUD 的計時器存起來
+            _displayTimer = AddTimer(Config.DisplayDuration, () =>
             {
                 if (bShowingServerGraphic)
                 {
@@ -104,14 +114,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-   // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
     private void CloseHUD()
     {
-        // 僅關閉布林值，讓 OnTick 停止每秒重新投影圖片
         bShowingServerGraphic = false; 
+    }
 
-        // 這裡不再使用 foreach 去發送任何字串
-        // 交給 CS2 引擎自己把圖片跟黑框一起平滑淡出
+    // 【新增】：統一清理計時器的輔助方法
+    private void ClearAllTimers()
+    {
+        _delayTimer?.Kill();
+        _delayTimer = null;
+
+        _displayTimer?.Kill();
+        _displayTimer = null;
     }
 
     #region Helpers
@@ -155,14 +170,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
         }
 
-        // 【新增】：檢查 CT 預設副武器是否被清空 (刀局特徵)
         var ctSecondary = ConVar.Find("mp_ct_default_secondary");
         if (ctSecondary != null)
         {
             try { if (string.IsNullOrEmpty(ctSecondary.GetPrimitiveValue<string>())) return false; } catch { }
         }
 
-        // 【新增】：檢查 T 預設副武器是否被清空 (刀局特徵)
         var tSecondary = ConVar.Find("mp_t_default_secondary");
         if (tSecondary != null)
         {
