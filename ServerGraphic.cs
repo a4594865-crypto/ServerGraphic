@@ -108,7 +108,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-    // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
+   // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
     private void CloseHUD()
     {
         bShowingServerGraphic = false; 
@@ -116,9 +116,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (IsPlayerValid(player)) 
             {
-                // 【修改這裡】：改用 PrintToCenterHtml 發送空字串，直接覆蓋掉原本的圖片頻道
-                // 這樣就不會喚醒底下的純文字黑框了
-                player.PrintToCenterHtml(""); 
+                // 使用零寬度字元，完美抹除 HTML 殘影與黑框
+                player.PrintToCenterHtml("&#8203;"); 
             }
         }
     }
