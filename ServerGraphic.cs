@@ -116,7 +116,9 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (IsPlayerValid(player)) 
             {
-                player.PrintToCenter(" "); 
+                // 【修改這裡】：改用 PrintToCenterHtml 發送空字串，直接覆蓋掉原本的圖片頻道
+                // 這樣就不會喚醒底下的純文字黑框了
+                player.PrintToCenterHtml(""); 
             }
         }
     }
