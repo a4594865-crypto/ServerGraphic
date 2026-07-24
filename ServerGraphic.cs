@@ -12,164 +12,160 @@ namespace ServerGraphic;
 public class ServerGraphicConfig : BasePluginConfig
 {
     [JsonPropertyName("Image")]
-    public string Image { get; set; } = "LINKTOIMAGE";
+    public string Image { get; set; } = "LINKTOIMAGE";[cite: 1]
 
     [JsonPropertyName("ImageWidth")]
-    public int ImageWidth { get; set; } = 600;
+    public int ImageWidth { get; set; } = 600;[cite: 1]
 
     [JsonPropertyName("ImageHeight")]
-    public int ImageHeight { get; set; } = 120;
+    public int ImageHeight { get; set; } = 120;[cite: 1]
 
-    // 已經不需要 DisplayDuration 秒數了，完全交由伺服器凍結時間決定
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 8;
+    public int UpdateTicks { get; set; } = 8;[cite: 1]
+
+    // 新增：自定義顯示秒數 (例如設定為 5 秒)
+    [JsonPropertyName("DisplayDuration")]
+    public float DisplayDuration { get; set; } = 5.0f;
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
-    public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.8"; // 更新為 1.0.8: 修復 restartgame 導致的 1 秒閃爍
-    public override string ModuleAuthor => "unfortunate";
+    public override string ModuleName => "ServerGraphic";[cite: 1]
+    public override string ModuleVersion => "1.0.9"; // 升級版本號以供辨識
+    public override string ModuleAuthor => "unfortunate";[cite: 1]
 
-    public ServerGraphicConfig Config { get; set; } = new();
-    public bool bShowingServerGraphic = false;
-    private string currentImageHtml = "";
+    public ServerGraphicConfig Config { get; set; } = new();[cite: 1]
+    public bool bShowingServerGraphic = false;[cite: 1]
+    private string currentImageHtml = "";[cite: 1]
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
-        // 確保換圖時關閉
-        RegisterListener<Listeners.OnMapStart>(map => bShowingServerGraphic = false);
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");[cite: 1]
+        RegisterListener<Listeners.OnMapStart>(map => bShowingServerGraphic = false);[cite: 1]
+        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");[cite: 1]
     }
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
-        Config = config;
-        // 這裡一樣幫你保留了原本的 HTML 組合方式
-        currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
+        Config = config;[cite: 1]
+        currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";[cite: 1]
 
-        // 負責在凍結時間內維持圖片顯示
-        RegisterListener<Listeners.OnTick>(() =>
+        RegisterListener<Listeners.OnTick>(() =>[cite: 1]
         {
-            if (!bShowingServerGraphic) return;
+            if (!bShowingServerGraphic) return;[cite: 1]
 
-            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-            if (Server.TickCount % tickInterval != 0) return;
+            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;[cite: 1]
+            if (Server.TickCount % tickInterval != 0) return;[cite: 1]
 
-            foreach (var player in Utilities.GetPlayers())
+            foreach (var player in Utilities.GetPlayers())[cite: 1]
             {
-                if (IsPlayerValid(player))
+                if (IsPlayerValid(player))[cite: 1]
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    player.PrintToCenterHtml(currentImageHtml);[cite: 1]
                 }
             }
-        });
+        });[cite: 1]
     }
 
-    // 🟢 事件 1：回合開始（加入 1.2 秒延遲避開 restart 假畫面）
+    // 🟢 事件 1：回合開始（保留過濾假畫面的機制）
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 1. 初步判斷是否為 Live 局條件
-        if (!IsLive())
+        if (!IsLive())[cite: 1]
         {
-            Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，不顯示 HUD。");
-            return HookResult.Continue;
+            Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，不顯示 HUD。");[cite: 1]
+            return HookResult.Continue;[cite: 1]
         }
 
-        Logger.LogInformation("[ServerGraphic] 準備進入 Live 局，等待 1.2 秒過濾 restart 過渡期...");
+        Logger.LogInformation("[ServerGraphic] 準備進入 Live 局，等待 1.2 秒過濾 restart 過渡期...");[cite: 1]
 
-        // 2. 延遲 1.2 秒執行，完美避開 mp_restartgame 1 的「重啟 1 秒假畫面」
-        AddTimer(1.2f, () =>
+        AddTimer(1.2f, () =>[cite: 1]
         {
-            // 3. 二次確認：過了 1.2 秒後，我們是否「真的」還在買槍凍結時間內？
-            var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-            if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
+            var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();[cite: 1]
+            if (gameRulesProxy != null && gameRulesProxy.GameRules != null)[cite: 1]
             {
-                // 如果已經不在凍結時間 (代表剛剛那 1 秒只是 restart)，就直接中斷
-                if (!gameRulesProxy.GameRules.FreezePeriod)
+                if (!gameRulesProxy.GameRules.FreezePeriod)[cite: 1]
                 {
-                    Logger.LogInformation("[ServerGraphic] 偵測到 mp_restartgame 過渡期，略過 HUD 顯示。");
-                    return;
+                    Logger.LogInformation("[ServerGraphic] 偵測到 mp_restartgame 過渡期，略過 HUD 顯示。");[cite: 1]
+                    return;[cite: 1]
                 }
             }
 
-            // 4. 確定是真正的 Live 局凍結時間，正式啟動 HUD
-            Logger.LogInformation("[ServerGraphic] 真實 Live 局凍結時間確認，啟動 HUD。");
-            bShowingServerGraphic = true; // 開啟 OnTick 投影
-        });
+            Logger.LogInformation($"[ServerGraphic] 真實 Live 局凍結時間確認，啟動 HUD。預計顯示 {Config.DisplayDuration} 秒。");[cite: 1]
+            bShowingServerGraphic = true;[cite: 1]
 
-        return HookResult.Continue;
+            // 【新增核心邏輯】：依照設定的秒數，時間到自動關閉 HUD
+            AddTimer(Config.DisplayDuration, () =>
+            {
+                if (bShowingServerGraphic)
+                {
+                    Logger.LogInformation("[ServerGraphic] 設定的顯示時間結束，關閉 HUD 並清除黑框。");
+                    CloseHUD();
+                }
+            });
+        });[cite: 1]
+
+        return HookResult.Continue;[cite: 1]
     }
 
-    // 🔴 事件 2：凍結時間結束（玩家可以移動的瞬間）
-    [GameEventHandler]
-    public HookResult OnEventRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo info)
+    // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
+    private void CloseHUD()
     {
-        if (bShowingServerGraphic)
+        bShowingServerGraphic = false; 
+        foreach (var player in Utilities.GetPlayers()) 
         {
-            Logger.LogInformation("[ServerGraphic] 凍結時間結束，關閉 HUD 並清除黑框。");
-            bShowingServerGraphic = false; // 關閉 OnTick 投影
-
-            // 發送空白字串，瞬間清除引擎殘留的黑框
-            foreach (var player in Utilities.GetPlayers())
+            if (IsPlayerValid(player)) 
             {
-                if (IsPlayerValid(player))
-                {
-                    player.PrintToCenter(" "); 
-                }
+                player.PrintToCenter(" "); 
             }
         }
-        return HookResult.Continue;
     }
+
+    // ⚠️ 注意：已經將 OnEventRoundFreezeEnd 刪除！
+    // 這樣凍結時間結束時就不會強制關掉圖片了。
 
     #region Helpers
-    public static bool IsPlayerValid(CCSPlayerController? player)
+    public static bool IsPlayerValid(CCSPlayerController? player)[cite: 1]
     {
-        return player != null
-            && player.IsValid
-            && !player.IsBot
-            && !player.IsHLTV
-            && player.PlayerPawn != null
-            && player.PlayerPawn.IsValid
-            && player.PlayerPawn.Value != null
-            && player.PlayerPawn.Value.IsValid;
+        return player != null[cite: 1]
+            && player.IsValid[cite: 1]
+            && !player.IsBot[cite: 1]
+            && !player.IsHLTV[cite: 1]
+            && player.PlayerPawn != null[cite: 1]
+            && player.PlayerPawn.IsValid[cite: 1]
+            && player.PlayerPawn.Value != null[cite: 1]
+            && player.PlayerPawn.Value.IsValid;[cite: 1]
     }
 
-    private bool IsLive()
+    private bool IsLive()[cite: 1]
     {
-        // 檢查內建暖身
-        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-        if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
+        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();[cite: 1]
+        if (gameRulesProxy != null && gameRulesProxy.GameRules != null)[cite: 1]
         {
-            if (gameRulesProxy.GameRules.WarmupPeriod) return false;
+            if (gameRulesProxy.GameRules.WarmupPeriod) return false;[cite: 1]
         }
 
-        // 對準你的 CFG：mp_maxmoney 0
-        var maxMoney = ConVar.Find("mp_maxmoney");
-        if (maxMoney != null)
+        var maxMoney = ConVar.Find("mp_maxmoney");[cite: 1]
+        if (maxMoney != null)[cite: 1]
         {
-            try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }
+            try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }[cite: 1]
         }
 
-        // 對準你的 CFG：mp_give_player_c4 0
-        var giveC4 = ConVar.Find("mp_give_player_c4");
-        if (giveC4 != null)
+        var giveC4 = ConVar.Find("mp_give_player_c4");[cite: 1]
+        if (giveC4 != null)[cite: 1]
         {
-            try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }
-            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { }
+            try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }[cite: 1]
+            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { }[cite: 1]
         }
 
-        // 對準你的 CFG：mp_free_armor 1
-        var freeArmor = ConVar.Find("mp_free_armor");
-        if (freeArmor != null)
+        var freeArmor = ConVar.Find("mp_free_armor");[cite: 1]
+        if (freeArmor != null)[cite: 1]
         {
-            try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }
-            try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
+            try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }[cite: 1]
+            try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }[cite: 1]
         }
 
-        return true; // 以上皆非，才是真正的 Live 局
+        return true;[cite: 1]
     }
     #endregion
 }
