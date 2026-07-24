@@ -46,7 +46,9 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
-        currentImageHtml = $"<img src='{Config.Image}' width='{Config.ImageWidth}' height='{Config.ImageHeight}'>";
+        
+        // 【修正 1】：改為使用 CSS style 屬性，確保 Panorama UI 能正確鎖定圖片比例
+        currentImageHtml = $"<img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'>";
 
         RegisterListener<Listeners.OnTick>(() =>
         {
@@ -69,13 +71,15 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        if (!IsLive())
-        {
-            return HookResult.Continue;
-        }
-
         AddTimer(0.5f, () =>
         {
+            // 【修正 2】：將 IsLive() 移進 Timer 內。
+            // 讓伺服器與比賽插件有 0.5 秒的時間處理刀局 C4 與護甲設定，徹底解決第一局誤判！
+            if (!IsLive())
+            {
+                return;
+            }
+
             var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
             if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
             {
@@ -100,13 +104,28 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-   // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
+    // 🟢 事件 2：玩家重生（解決離線重進或中途加入的殘留問題）
+    [GameEventHandler]
+    public HookResult OnEventPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+
+        // 【修正 3】：如果玩家有效，且當前「不是」顯示 HUD 的時間
+        // 就發送空字串，徹底清空該玩家剛連線時，伺服器塞給他的殘留記憶
+        if (IsPlayerValid(player) && !bShowingServerGraphic)
+        {
+            player.PrintToCenterHtml("");
+        }
+
+        return HookResult.Continue;
+    }
+
+    // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
     private void CloseHUD()
     {
         // 僅關閉布林值，讓 OnTick 停止每秒重新投影圖片
         bShowingServerGraphic = false; 
 
-        // 這裡不再使用 foreach 去發送任何字串
         // 交給 CS2 引擎自己把圖片跟黑框一起平滑淡出
     }
 
