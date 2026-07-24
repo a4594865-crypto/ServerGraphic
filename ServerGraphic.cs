@@ -103,15 +103,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
    // 將清除 HUD 的邏輯獨立為一個方法，方便呼叫
     private void CloseHUD()
     {
+        // 僅關閉布林值，讓 OnTick 停止每秒重新投影圖片
         bShowingServerGraphic = false; 
-        foreach (var player in Utilities.GetPlayers()) 
-        {
-            if (IsPlayerValid(player)) 
-            {
-                // 使用零寬度字元，完美抹除 HTML 殘影與黑框
-                player.PrintToCenterHtml("&#8203;"); 
-            }
-        }
+
+        // 這裡不再使用 foreach 去發送任何字串
+        // 交給 CS2 引擎自己把圖片跟黑框一起平滑淡出
     }
 
     #region Helpers
