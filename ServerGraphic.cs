@@ -40,9 +40,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     public override void Load(bool hotReload)
     {
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading +++ ");
         RegisterListener<Listeners.OnMapStart>(map => bShowingServerGraphic = false);
-        Console.WriteLine("[INFO] [CS2ServerGraphic] Loading --- ");
     }
 
     public void OnConfigParsed(ServerGraphicConfig config)
@@ -73,11 +71,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         if (!IsLive())
         {
-            Logger.LogInformation("[ServerGraphic] 偵測為暖身或刀局，不顯示 HUD。");
             return HookResult.Continue;
         }
-
-        Logger.LogInformation("[ServerGraphic] 準備進入 Live 局，等待 1.2 秒過濾 restart 過渡期...");
 
         AddTimer(1.2f, () =>
         {
@@ -86,12 +81,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             {
                 if (!gameRulesProxy.GameRules.FreezePeriod)
                 {
-                    Logger.LogInformation("[ServerGraphic] 偵測到 mp_restartgame 過渡期，略過 HUD 顯示。");
                     return;
                 }
             }
 
-            Logger.LogInformation($"[ServerGraphic] 真實 Live 局凍結時間確認，啟動 HUD。預計顯示 {Config.DisplayDuration} 秒。");
             bShowingServerGraphic = true;
 
             // 【新增核心邏輯】：依照設定的秒數，時間到自動關閉 HUD
@@ -99,7 +92,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             {
                 if (bShowingServerGraphic)
                 {
-                    Logger.LogInformation("[ServerGraphic] 設定的顯示時間結束，關閉 HUD 並清除黑框。");
                     CloseHUD();
                 }
             });
