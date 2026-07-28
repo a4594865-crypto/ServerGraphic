@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
 using System.Linq;
 using System;
+// 新增引入 Timers 模組
 using CounterStrikeSharp.API.Modules.Timers; 
 
 namespace ServerGraphic;
@@ -31,26 +32,23 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.12"; // 維持你原本的版本設定
+    public override string ModuleVersion => "1.0.12"; // 升級為 1.0.12 (修復計時器重疊)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
 
+    // 【新增】：用來記錄並管理正在運行的計時器，避免跨回合干擾
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
-
-    // 【純淨注入】：只加入不閃爍需要的變數
-    private CCSGameRulesProxy? _gameRulesProxy;
-    private bool _runThisTick = false;
 
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             bShowingServerGraphic = false;
-            _gameRulesProxy = null; // 換圖時清空
+            // 換圖時也把計時器清掉最安全
             ClearAllTimers();
         });
     }
@@ -63,45 +61,17 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         RegisterListener<Listeners.OnTick>(() =>
         {
-            // 如果不在顯示期間，直接退出，確保不干擾平時伺服器運作
             if (!bShowingServerGraphic) return;
 
-            // --- 你原本完美的更新頻率邏輯 ---
             int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-            if (Server.TickCount % tickInterval == 0)
+            if (Server.TickCount % tickInterval != 0) return;
+
+            foreach (var player in Utilities.GetPlayers())
             {
-                foreach (var player in Utilities.GetPlayers())
+                if (IsPlayerValid(player))
                 {
-                    if (IsPlayerValid(player))
-                    {
-                        player.PrintToCenterHtml(currentImageHtml);
-                    }
+                    player.PrintToCenterHtml(currentImageHtml);
                 }
-            }
-
-            // --- 【純淨注入】：不閃爍魔法 (欺騙引擎) ---
-            // 因為被包在 if (!bShowingServerGraphic) return; 之後，所以這招只在 LOGO 顯示期間才會啟動！
-            _runThisTick = !_runThisTick;
-
-            if (!_runThisTick) return;
-
-            var proxy = GetGameRulesProxy();
-
-            if (proxy == null || !proxy.IsValid) return;
-
-            var gameRules = proxy.GameRules;
-            if (gameRules == null) return;
-            if (gameRules.WarmupPeriod) return;
-
-            float currentTime = Server.CurrentTime;
-            float restartTime = gameRules.RestartRoundTime;
-
-            bool expectedState = restartTime < currentTime;
-
-            if (gameRules.GameRestart != expectedState)
-            {
-                gameRules.GameRestart = expectedState;
-                Utilities.SetStateChanged(proxy, "CCSGameRulesProxy", "m_pGameRules");
             }
         });
     }
@@ -109,8 +79,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        // 【核心修復】：回合一開始，立刻砍掉任何可能還在背景跑的舊回合計時器
         ClearAllTimers();
 
+        // 將 0.5 秒的延遲計時器存起來
         _delayTimer = AddTimer(0.5f, () =>
         {
             if (!IsLive())
@@ -125,21 +97,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 {
                     return;
                 }
-
-                // ==========================================
-                // 【新增】：防連跳機制 (阻擋 mp_restartgame 造成的二次顯示)
-                // 如果伺服器排定的重啟時間 (RestartRoundTime) > 伺服器當前時間，
-                // 代表 1 秒後即將重啟。我們就直接 return 放棄這次顯示，等重啟後再秀 LOGO！
-                // ==========================================
-                if (gameRulesProxy.GameRules.RestartRoundTime > Server.CurrentTime)
-                {
-                    return; 
-                }
             }
 
             bShowingServerGraphic = true;
 
-            // --- 你原本完美的關閉計時器邏輯 ---
+            // 將關閉 HUD 的計時器存起來
             _displayTimer = AddTimer(Config.DisplayDuration, () =>
             {
                 if (bShowingServerGraphic)
@@ -154,10 +116,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private void CloseHUD()
     {
-        // 恢復你原本的寫法，只改狀態停手，讓 CS2 畫面自然淡出，絕不產生黑框！
         bShowingServerGraphic = false; 
     }
 
+    // 【新增】：統一清理計時器的輔助方法
     private void ClearAllTimers()
     {
         _delayTimer?.Kill();
@@ -221,24 +183,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         }
 
         return true;
-    }
-
-    // 【純淨注入】：輔助獲取 Proxy 的方法
-    private CCSGameRulesProxy? GetGameRulesProxy()
-    {
-        if (_gameRulesProxy != null && _gameRulesProxy.IsValid)
-        {
-            return _gameRulesProxy;
-        }
-
-        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
-        {
-            _gameRulesProxy = entity;
-            return _gameRulesProxy;
-        }
-
-        _gameRulesProxy = null;
-        return null;
     }
     #endregion
 }
