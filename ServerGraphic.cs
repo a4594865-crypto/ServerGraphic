@@ -125,6 +125,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 {
                     return;
                 }
+
+                // ==========================================
+                // 【新增】：防連跳機制 (阻擋 mp_restartgame 造成的二次顯示)
+                // 如果伺服器排定的重啟時間 (RestartRoundTime) > 伺服器當前時間，
+                // 代表 1 秒後即將重啟。我們就直接 return 放棄這次顯示，等重啟後再秀 LOGO！
+                // ==========================================
+                if (gameRulesProxy.GameRules.RestartRoundTime > Server.CurrentTime)
+                {
+                    return; 
+                }
             }
 
             bShowingServerGraphic = true;
