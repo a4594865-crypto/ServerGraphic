@@ -22,7 +22,7 @@ public class ServerGraphicConfig : BasePluginConfig
     public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 8; // ✅ 幫你預設成 1，畫面最絲滑不閃爍
+    public int UpdateTicks { get; set; } = 1;
 
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 5.0f;
@@ -31,7 +31,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.14"; // 升級為 1.0.14 (極限無垃圾迴圈版 + 圖片精準顯示)
+    public override string ModuleVersion => "1.0.15"; // 升級為 1.0.15 (微秒級榨汁極限優化版)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -39,14 +39,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private string currentImageHtml = "";
     
     private int _tickInterval = 1; 
+    private int _cachedMaxPlayers = 64; // 【優化 2】：先準備好快取變數
 
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
 
     public override void Load(bool hotReload)
     {
+        _cachedMaxPlayers = Server.MaxPlayers;
+
         RegisterListener<Listeners.OnMapStart>(map => 
         {
+            _cachedMaxPlayers = Server.MaxPlayers; // 換地圖時更新快取，迴圈就不必每秒問 64 次
             bShowingServerGraphic = false;
             ClearAllTimers();
         });
@@ -54,13 +58,18 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         RegisterListener<Listeners.OnTick>(() =>
         {
             if (!bShowingServerGraphic) return;
-            if (Server.TickCount % _tickInterval != 0) return;
+            
+            // 【優化 3】：如果設定為 1，直接跳過耗時的 % (取餘數) 數學運算
+            if (_tickInterval > 1 && Server.TickCount % _tickInterval != 0) return;
 
-            // 【終極效能】：每秒 64 次零負擔點名，不會觸發伺服器卡頓報表！
-            for (int i = 0; i < Server.MaxPlayers; i++)
+            // 用快取的最大人數跑迴圈
+            for (int i = 0; i < _cachedMaxPlayers; i++)
             {
                 var player = Utilities.GetPlayerFromSlot(i);
-                if (IsPlayerValid(player))
+                
+                // 【優化 1】：極簡化驗證。只檢查網路控制器，不檢查遊戲實體模型(Pawn)。
+                // 這樣省去了每秒上萬次的底層 C++ 記憶體訪問，效能大幅提升！
+                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                 {
                     player.PrintToCenterHtml(currentImageHtml);
                 }
@@ -73,7 +82,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         Config = config;
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
         
-        // 【圖片顯示修復】：完全棄用 100%，強制 CS2 畫出精準像素大小，保證圖片出現！
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
@@ -121,16 +129,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
+    
+    // 這裡的 IsPlayerValid 可以移除了，因為我們直接把極簡判斷寫在 OnTick 迴圈內以求最快速度
+    // 但為了不破壞其他可能想呼叫的習慣，我們把它留在這裡備用，並同樣拔除 Pawn 檢查
     public static bool IsPlayerValid(CCSPlayerController? player)
     {
-        return player != null
-            && player.IsValid
-            && !player.IsBot
-            && !player.IsHLTV
-            && player.PlayerPawn != null
-            && player.PlayerPawn.IsValid
-            && player.PlayerPawn.Value != null
-            && player.PlayerPawn.Value.IsValid;
+        return player != null && player.IsValid && !player.IsBot && !player.IsHLTV;
     }
 
     private bool IsLive()
