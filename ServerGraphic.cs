@@ -111,7 +111,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         ClearAllTimers();
 
-        _delayTimer = AddTimer(1.5f, () =>
+        _delayTimer = AddTimer(0.5f, () =>
         {
             if (!IsLive())
             {
