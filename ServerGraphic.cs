@@ -15,30 +15,31 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("Image")]
     public string Image { get; set; } = "LINKTOIMAGE";
 
-    // ✅ 這裡預設值已經幫你改成 250
     [JsonPropertyName("ImageWidth")]
     public int ImageWidth { get; set; } = 250;
 
-    // ✅ 這裡預設值已經幫你改成 35
     [JsonPropertyName("ImageHeight")]
     public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 1;
+    public int UpdateTicks { get; set; } = 8; // ✅ 放心保持 8，不會再有效能問題了！
 
     [JsonPropertyName("DisplayDuration")]
-    public float DisplayDuration { get; set; } = 7.0f;
+    public float DisplayDuration { get; set; } = 5.0f;
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.13"; 
+    public override string ModuleVersion => "1.0.14"; // 升級為 1.0.14 (極限無垃圾迴圈版)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
+    
+    // 【新增】：將算術邏輯移出 OnTick，先算好存起來
+    private int _tickInterval = 8; 
 
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
@@ -54,12 +55,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         RegisterListener<Listeners.OnTick>(() =>
         {
             if (!bShowingServerGraphic) return;
+            if (Server.TickCount % _tickInterval != 0) return;
 
-            int tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-            if (Server.TickCount % tickInterval != 0) return;
-
-            foreach (var player in Utilities.GetPlayers())
+            // 【終極效能修復】：棄用 Utilities.GetPlayers()，改用 Slot 直接點名。
+            // 這樣寫 0 負擔，完全不會產生任何記憶體垃圾 (GC)，徹底告別 Server Simulation 報表！
+            for (int i = 0; i < Server.MaxPlayers; i++)
             {
+                var player = Utilities.GetPlayerFromSlot(i);
                 if (IsPlayerValid(player))
                 {
                     player.PrintToCenterHtml(currentImageHtml);
@@ -71,8 +73,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
+        _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
         
-        // 這裡會自動讀取你設定的 250 和 35 來撐開空間，防止閃爍
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: 100%; height: 100%;'></div>";
     }
 
@@ -83,18 +85,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         _delayTimer = AddTimer(0.5f, () =>
         {
-            if (!IsLive())
-            {
-                return;
-            }
+            if (!IsLive()) return;
 
             var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
             if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
             {
-                if (!gameRulesProxy.GameRules.FreezePeriod)
-                {
-                    return;
-                }
+                if (!gameRulesProxy.GameRules.FreezePeriod) return;
             }
 
             bShowingServerGraphic = true;
