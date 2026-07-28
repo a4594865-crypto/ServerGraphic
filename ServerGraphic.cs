@@ -31,18 +31,18 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.13"; 
+    public override string ModuleVersion => "1.0.14"; // 升級為 1.0.14：修復殘影現象
     public override string ModuleAuthor => "unfortunate & SLAYER"; 
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
 
-    // 【保留你的設計】：用來記錄並管理正在運行的計時器，避免跨回合干擾
+    // 用來記錄並管理正在運行的計時器，避免跨回合干擾
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
 
-    // 【新增】：從不閃爍版本移植過來的變數，用來緩存規則與控制執行頻率
+    // 從不閃爍版本移植過來的變數，用來緩存規則與控制執行頻率
     private CCSGameRulesProxy? _gameRulesProxy;
     private bool _runThisTick = false;
 
@@ -65,7 +65,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         RegisterListener<Listeners.OnTick>(() =>
         {
             // ==========================================
-            // 1. 保留你的：控制每 N 個 Tick 發送一次 HTML 圖片
+            // 1. 控制每 N 個 Tick 發送一次 HTML 圖片，保護伺服器效能
             // ==========================================
             if (bShowingServerGraphic)
             {
@@ -83,7 +83,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
 
             // ==========================================
-            // 2. 【核心移植】：不閃爍的底層邏輯 (欺騙遊戲引擎)
+            // 2. 不閃爍的底層邏輯 (欺騙遊戲引擎，壓制原生 UI)
             // ==========================================
             _runThisTick = !_runThisTick;
 
@@ -116,7 +116,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // 【保留你的邏輯】：回合一開始，立刻砍掉任何可能還在背景跑的舊回合計時器
+        // 回合一開始，立刻砍掉任何可能還在背景跑的舊回合計時器
         ClearAllTimers();
 
         // 將 0.5 秒的延遲計時器存起來
@@ -154,6 +154,15 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void CloseHUD()
     {
         bShowingServerGraphic = false; 
+
+        // 【新增】：計時器結束時，主動對全體玩家發送空白字串，瞬間抹除客戶端上的殘影！
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (IsPlayerValid(player))
+            {
+                player.PrintToCenterHtml(" "); 
+            }
+        }
     }
 
     private void ClearAllTimers()
@@ -168,7 +177,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     #region Helpers
     public static bool IsPlayerValid(CCSPlayerController? player)
     {
-        // 【保留你的邏輯】：你對 Pawn 寫的嚴格安全檢查完整保留
+        // 嚴格的安全檢查
         return player != null
             && player.IsValid
             && !player.IsBot
@@ -179,7 +188,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             && player.PlayerPawn.Value.IsValid;
     }
 
-    // 【新增】：從不閃爍版本移植過來的 GameRules 高效獲取與緩存方法
+    // 從不閃爍版本移植過來的 GameRules 高效獲取與緩存方法
     private CCSGameRulesProxy? GetGameRulesProxy()
     {
         if (_gameRulesProxy != null && _gameRulesProxy.IsValid)
@@ -199,7 +208,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private bool IsLive()
     {
-        // 【保留你的邏輯】：判斷是否為正式比賽的底層檢查完整保留
+        // 判斷是否為正式比賽的底層檢查
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
         {
