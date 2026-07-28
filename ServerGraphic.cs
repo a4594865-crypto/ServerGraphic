@@ -120,7 +120,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         ClearAllTimers();
 
         // 將 0.5 秒的延遲計時器存起來
-        _delayTimer = AddTimer(0.5f, () =>
+        _delayTimer = AddTimer(1.5f, () =>
         {
             if (!IsLive())
             {
