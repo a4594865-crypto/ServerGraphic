@@ -1,183 +1,90 @@
-using System.Text.Json.Serialization;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Cvars;
-using Microsoft.Extensions.Logging;
+using CounterStrikeSharp.API.Modules.Timers;
 using System.Linq;
-using System;
-using CounterStrikeSharp.API.Modules.Timers; 
+using System.Text.Json.Serialization;
 
-namespace ServerGraphic;
-
-public class ServerGraphicConfig : BasePluginConfig
+namespace ServerGraphic
 {
-    [JsonPropertyName("Image")]
-    public string Image { get; set; } = "LINKTOIMAGE";
-
-    [JsonPropertyName("ImageWidth")]
-    public int ImageWidth { get; set; } = 250;
-
-    [JsonPropertyName("ImageHeight")]
-    public int ImageHeight { get; set; } = 35;
-
-    [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 1;
-
-    [JsonPropertyName("DisplayDuration")]
-    public float DisplayDuration { get; set; } = 5.0f;
-}
-
-public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
-{
-    public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.15"; // 升級為 1.0.15 (微秒級榨汁極限優化版)
-    public override string ModuleAuthor => "unfortunate";
-
-    public ServerGraphicConfig Config { get; set; } = new();
-    public bool bShowingServerGraphic = false;
-    private string currentImageHtml = "";
-    
-    private int _tickInterval = 1; 
-    private int _cachedMaxPlayers = 64; // 【優化 2】：先準備好快取變數
-
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
-
-    public override void Load(bool hotReload)
+    // 設定檔類別：現在包含了圖片網址、秒數，以及圖片的寬度與高度！
+    public class ServerGraphicConfig : BasePluginConfig
     {
-        _cachedMaxPlayers = Server.MaxPlayers;
+        [JsonPropertyName("DisplayDuration")]
+        public float DisplayDuration { get; set; } = 7.0f; // 預設顯示 5 秒
 
-        RegisterListener<Listeners.OnMapStart>(map => 
+        [JsonPropertyName("ImageUrl")]
+        public string ImageUrl { get; set; } = "https://pub-d9ae6a92fc9e4608a18e6c1f443e953e.r2.dev/logo10.png"; // 請換成你的網址
+
+        [JsonPropertyName("ImageWidth")]
+        public int ImageWidth { get; set; } = 250; // 預設寬度 250px
+
+        [JsonPropertyName("ImageHeight")]
+        public int ImageHeight { get; set; } = 35; // 預設高度 35px
+    }
+
+    public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
+    {
+        public override string ModuleName => "Server Graphic";
+        public override string ModuleVersion => "1.0.15c"; // 加入寬高自訂設定檔功能
+        public override string ModuleAuthor => "Your Name";
+
+        public ServerGraphicConfig Config { get; set; } = new();
+
+        private bool _bShowingServerGraphic = false;
+        private CounterStrikeSharp.API.Modules.Timers.Timer? _graphicTimer = null;
+        private int _cachedMaxPlayers = 64; 
+        private string _htmlContent = "";
+
+        public void OnConfigParsed(ServerGraphicConfig config)
         {
-            _cachedMaxPlayers = Server.MaxPlayers; // 換地圖時更新快取，迴圈就不必每秒問 64 次
-            bShowingServerGraphic = false;
-            ClearAllTimers();
-        });
+            Config = config;
+            // 這裡動態讀取設定檔裡的寬高，組合出 HTML 代碼
+            _htmlContent = $"<img src='{Config.ImageUrl}' style='width:{Config.ImageWidth}px; height:{Config.ImageHeight}px;'>";
+        }
 
-        RegisterListener<Listeners.OnTick>(() =>
+        public override void Load(bool hotReload)
         {
-            if (!bShowingServerGraphic) return;
-            
-            // 【優化 3】：如果設定為 1，直接跳過耗時的 % (取餘數) 數學運算
-            if (_tickInterval > 1 && Server.TickCount % _tickInterval != 0) return;
+            RegisterEventHandler<EventRoundStart>(OnEventRoundStart);
+            RegisterListener<Listeners.OnTick>(OnTick);
+        }
 
-            // 用快取的最大人數跑迴圈
-            for (int i = 0; i < _cachedMaxPlayers; i++)
+        private HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
+        {
+            _cachedMaxPlayers = Server.MaxPlayers;
+
+            AddTimer(0.5f, () =>
+            {
+                var gameRules = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
+                if (gameRules == null) return;
+
+                if (!gameRules.FreezePeriod) return;
+
+                _bShowingServerGraphic = true;
+                _graphicTimer?.Kill();
+
+                _graphicTimer = AddTimer(Config.DisplayDuration, () =>
+                {
+                    _bShowingServerGraphic = false;
+                    _graphicTimer = null;
+                });
+            });
+
+            return HookResult.Continue;
+        }
+
+        private void OnTick()
+        {
+            if (!_bShowingServerGraphic) return;
+
+            for (int i = 1; i <= _cachedMaxPlayers; i++)
             {
                 var player = Utilities.GetPlayerFromSlot(i);
-                
-                // 【優化 1】：極簡化驗證。只檢查網路控制器，不檢查遊戲實體模型(Pawn)。
-                // 這樣省去了每秒上萬次的底層 C++ 記憶體訪問，效能大幅提升！
+
                 if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    player.PrintToCenterHtml(_htmlContent);
                 }
             }
-        });
-    }
-
-    public void OnConfigParsed(ServerGraphicConfig config)
-    {
-        Config = config;
-        _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-        
-        currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
-    }
-
-    [GameEventHandler]
-    public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
-    {
-        ClearAllTimers();
-
-        _delayTimer = AddTimer(0.5f, () =>
-        {
-            if (!IsLive()) return;
-
-            var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-            if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
-            {
-                if (!gameRulesProxy.GameRules.FreezePeriod) return;
-            }
-
-            bShowingServerGraphic = true;
-
-            _displayTimer = AddTimer(Config.DisplayDuration, () =>
-            {
-                if (bShowingServerGraphic)
-                {
-                    CloseHUD();
-                }
-            });
-        });
-
-        return HookResult.Continue;
-    }
-
-    private void CloseHUD()
-    {
-        bShowingServerGraphic = false; 
-    }
-
-    private void ClearAllTimers()
-    {
-        _delayTimer?.Kill();
-        _delayTimer = null;
-
-        _displayTimer?.Kill();
-        _displayTimer = null;
-    }
-
-    #region Helpers
-    
-    // 這裡的 IsPlayerValid 可以移除了，因為我們直接把極簡判斷寫在 OnTick 迴圈內以求最快速度
-    // 但為了不破壞其他可能想呼叫的習慣，我們把它留在這裡備用，並同樣拔除 Pawn 檢查
-    public static bool IsPlayerValid(CCSPlayerController? player)
-    {
-        return player != null && player.IsValid && !player.IsBot && !player.IsHLTV;
-    }
-
-    private bool IsLive()
-    {
-        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-        if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
-        {
-            if (gameRulesProxy.GameRules.WarmupPeriod) return false;
         }
-
-        var maxMoney = ConVar.Find("mp_maxmoney");
-        if (maxMoney != null)
-        {
-            try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }
-        }
-
-        var giveC4 = ConVar.Find("mp_give_player_c4");
-        if (giveC4 != null)
-        {
-            try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }
-            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { }
-        }
-
-        var freeArmor = ConVar.Find("mp_free_armor");
-        if (freeArmor != null)
-        {
-            try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }
-            try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
-        }
-
-        var ctSecondary = ConVar.Find("mp_ct_default_secondary");
-        if (ctSecondary != null)
-        {
-            try { if (string.IsNullOrEmpty(ctSecondary.GetPrimitiveValue<string>())) return false; } catch { }
-        }
-
-        var tSecondary = ConVar.Find("mp_t_default_secondary");
-        if (tSecondary != null)
-        {
-            try { if (string.IsNullOrEmpty(tSecondary.GetPrimitiveValue<string>())) return false; } catch { }
-        }
-
-        return true;
     }
-    #endregion
 }
