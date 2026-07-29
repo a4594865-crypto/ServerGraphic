@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
 using System.Linq;
 using System;
+using System.Collections.Generic; // 【新增】為了使用名單 (List) 功能
 using CounterStrikeSharp.API.Modules.Timers; 
 
 namespace ServerGraphic;
@@ -22,7 +23,7 @@ public class ServerGraphicConfig : BasePluginConfig
     public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 1; // 保持 1，維持你要的呼吸感
+    public int UpdateTicks { get; set; } = 1; // 維持 1 保持完美的呼吸感
 
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 7.0f;
@@ -31,7 +32,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.17"; // 升級為 1.0.17 (精準隊伍過濾：僅限 T 與 CT，排除觀察者)
+    public override string ModuleVersion => "1.0.18"; // 升級為 1.0.18 (名單快取極限優化版)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -42,12 +43,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
+    
+    // 【極限優化核心】：宣告一個專屬發送名單
+    private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
 
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             bShowingServerGraphic = false;
+            _targetPlayers.Clear(); // 換圖時清空名單
             ClearAllTimers();
         });
 
@@ -56,16 +61,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            foreach (var player in Utilities.GetPlayers())
+            // 【效能解放】：不再呼叫 Utilities.GetPlayers()，不產生記憶體垃圾
+            // 也不再做繁瑣的 BOT、HLTV、隊伍判斷，直接對著點好名的名單發送！
+            foreach (var player in _targetPlayers)
             {
-                // 第一層過濾：確保是活人實體，且不是 BOT，也不是 CSTV(HLTV)
-                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                // 僅保留最後一道安全防線：防範這 7 秒內剛好有人斷線離開伺服器
+                if (player != null && player.IsValid)
                 {
-                    // 第二層過濾：2 是 T，3 是 CT。排除 0(無隊伍) 與 1(觀察者)
-                    if (player.TeamNum == 2 || player.TeamNum == 3)
-                    {
-                        player.PrintToCenterHtml(currentImageHtml);
-                    }
+                    player.PrintToCenterHtml(currentImageHtml);
                 }
             }
         });
@@ -94,6 +97,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 if (!gameRulesProxy.GameRules.FreezePeriod) return;
             }
 
+            // 【建立名單】：回合開始時，一次性把符合資格的人點名出來
+            _targetPlayers.Clear();
+            foreach (var player in Utilities.GetPlayers())
+            {
+                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                {
+                    if (player.TeamNum == 2 || player.TeamNum == 3) // 2是T，3是CT
+                    {
+                        _targetPlayers.Add(player); // 加入發送名單
+                    }
+                }
+            }
+
             bShowingServerGraphic = true;
 
             _displayTimer = AddTimer(Config.DisplayDuration, () =>
@@ -108,6 +124,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void CloseHUD()
     {
         bShowingServerGraphic = false; 
+        _targetPlayers.Clear(); // 顯示結束後，清空名單釋放伺服器資源
     }
 
     private void ClearAllTimers()
