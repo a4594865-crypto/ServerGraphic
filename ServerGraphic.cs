@@ -22,7 +22,7 @@ public class ServerGraphicConfig : BasePluginConfig
     public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 1; // 恢復為 1，保留完美的「呼吸」動態感！
+    public int UpdateTicks { get; set; } = 1; // 保持 1，維持你要的呼吸感
 
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 7.0f;
@@ -31,7 +31,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.16"; // 升級為 1.0.16 (呼吸感回歸 + 極限輕量化 OnTick)
+    public override string ModuleVersion => "1.0.17"; // 升級為 1.0.17 (精準隊伍過濾：僅限 T 與 CT，排除觀察者)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -56,14 +56,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            // 【效能大解放】：不跑 64 次無效迴圈，改用 GetPlayers() 直接拿現存玩家
-            // 這樣每秒的計算量會從 4000+ 次暴跌到不到 600 次，伺服器不再報錯卡頓！
             foreach (var player in Utilities.GetPlayers())
             {
-                // 極度輕量化的驗證：只要是活人就送出 UI，維持你的呼吸感
+                // 第一層過濾：確保是活人實體，且不是 BOT，也不是 CSTV(HLTV)
                 if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    // 第二層過濾：2 是 T，3 是 CT。排除 0(無隊伍) 與 1(觀察者)
+                    if (player.TeamNum == 2 || player.TeamNum == 3)
+                    {
+                        player.PrintToCenterHtml(currentImageHtml);
+                    }
                 }
             }
         });
