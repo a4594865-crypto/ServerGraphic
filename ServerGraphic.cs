@@ -22,7 +22,7 @@ public class ServerGraphicConfig : BasePluginConfig
     public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
-    public int UpdateTicks { get; set; } = 1; // 設定檔保留，但內部已改用更智慧的計時器
+    public int UpdateTicks { get; set; } = 1; // 恢復為 1，保留完美的「呼吸」動態感！
 
     [JsonPropertyName("DisplayDuration")]
     public float DisplayDuration { get; set; } = 7.0f;
@@ -31,16 +31,17 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.15"; // 升級為 1.0.15 (廢除 OnTick 暴力刷新，改用節能計時器)
+    public override string ModuleVersion => "1.0.16"; // 升級為 1.0.16 (呼吸感回歸 + 極限輕量化 OnTick)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
     
+    private int _tickInterval = 1; 
+
     private CounterStrikeSharp.API.Modules.Timers.Timer? _delayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _displayTimer;
-    private CounterStrikeSharp.API.Modules.Timers.Timer? _hudTimer; // 新增專屬的 UI 刷新計時器
 
     public override void Load(bool hotReload)
     {
@@ -49,13 +50,30 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             bShowingServerGraphic = false;
             ClearAllTimers();
         });
-        
-        // 【重要修改】：完全刪除了 OnTick，解放伺服器 CPU 效能！
+
+        RegisterListener<Listeners.OnTick>(() =>
+        {
+            if (!bShowingServerGraphic) return;
+            if (Server.TickCount % _tickInterval != 0) return;
+
+            // 【效能大解放】：不跑 64 次無效迴圈，改用 GetPlayers() 直接拿現存玩家
+            // 這樣每秒的計算量會從 4000+ 次暴跌到不到 600 次，伺服器不再報錯卡頓！
+            foreach (var player in Utilities.GetPlayers())
+            {
+                // 極度輕量化的驗證：只要是活人就送出 UI，維持你的呼吸感
+                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                {
+                    player.PrintToCenterHtml(currentImageHtml);
+                }
+            }
+        });
     }
 
     public void OnConfigParsed(ServerGraphicConfig config)
     {
         Config = config;
+        _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+        
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
@@ -76,21 +94,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
             bShowingServerGraphic = true;
 
-            // 【效能革命】：改用 0.2 秒刷新一次 (每秒 5 次)，取代原本的每秒 64 次。畫面一樣穩，伺服器不再報錯卡頓！
-            _hudTimer = AddTimer(0.2f, () => 
-            {
-                if (!bShowingServerGraphic) return;
-                
-                // 改用 GetPlayers() 更快，因為它只會抓有玩家的空位，不會像以前一樣跑無效迴圈
-                foreach (var player in Utilities.GetPlayers())
-                {
-                    if (IsPlayerValid(player))
-                    {
-                        player.PrintToCenterHtml(currentImageHtml);
-                    }
-                }
-            }, TimerFlags.REPEAT);
-
             _displayTimer = AddTimer(Config.DisplayDuration, () =>
             {
                 CloseHUD();
@@ -103,8 +106,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private void CloseHUD()
     {
         bShowingServerGraphic = false; 
-        _hudTimer?.Kill();
-        _hudTimer = null;
     }
 
     private void ClearAllTimers()
@@ -114,24 +115,9 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         _displayTimer?.Kill();
         _displayTimer = null;
-
-        _hudTimer?.Kill();
-        _hudTimer = null;
     }
 
     #region Helpers
-    public static bool IsPlayerValid(CCSPlayerController? player)
-    {
-        return player != null
-            && player.IsValid
-            && !player.IsBot
-            && !player.IsHLTV
-            && player.PlayerPawn != null
-            && player.PlayerPawn.IsValid
-            && player.PlayerPawn.Value != null
-            && player.PlayerPawn.Value.IsValid;
-    }
-
     private bool IsLive()
     {
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
