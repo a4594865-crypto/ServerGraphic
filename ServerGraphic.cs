@@ -85,23 +85,31 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (!IsLive()) return HookResult.Continue;
 
-        if (!_targetPlayers.Contains(victim))
+        // 加回原版的 0.2 秒延遲
+        AddTimer(0.5f, () =>
         {
-            _targetPlayers.Add(victim);
-        }
-        bShowingServerGraphic = true;
+            // 經過 0.2 秒後，再次確認玩家是否還在伺服器內 (防止剛死掉就秒退的報錯)
+            if (victim == null || !victim.IsValid) return;
 
-        AddTimer(Config.DisplayDuration, () =>
-        {
-            if (_targetPlayers.Contains(victim))
+            if (!_targetPlayers.Contains(victim))
             {
-                _targetPlayers.Remove(victim);
+                _targetPlayers.Add(victim);
             }
+            bShowingServerGraphic = true;
 
-            if (_targetPlayers.Count == 0)
+            // 啟動顯示時間的計時器
+            AddTimer(Config.DisplayDuration, () =>
             {
-                bShowingServerGraphic = false;
-            }
+                if (_targetPlayers.Contains(victim))
+                {
+                    _targetPlayers.Remove(victim);
+                }
+
+                if (_targetPlayers.Count == 0)
+                {
+                    bShowingServerGraphic = false;
+                }
+            });
         });
 
         return HookResult.Continue;
