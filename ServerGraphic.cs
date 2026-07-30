@@ -32,7 +32,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.19"; 
+    public override string ModuleVersion => "1.0.20"; // 升級為 1.0.20 (記憶體零負擔極限優化版)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -56,9 +56,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            var currentPlayers = _targetPlayers.ToArray(); 
-            foreach (var player in currentPlayers)
+            // 【效能極限優化】：使用反向迴圈，不產生任何記憶體垃圾 (Garbage)
+            for (int i = _targetPlayers.Count - 1; i >= 0; i--)
             {
+                var player = _targetPlayers[i];
                 if (player != null && player.IsValid)
                 {
                     player.PrintToCenterHtml(currentImageHtml);
@@ -85,10 +86,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (!IsLive()) return HookResult.Continue;
 
-        // 加回原版的 0.2 秒延遲
-        AddTimer(0.5f, () =>
+        // 0.2 秒延遲顯示
+        AddTimer(0.2f, () =>
         {
-            // 經過 0.2 秒後，再次確認玩家是否還在伺服器內 (防止剛死掉就秒退的報錯)
+            // 再次確認玩家狀態，防止 0.2 秒內斷線導致報錯
             if (victim == null || !victim.IsValid) return;
 
             if (!_targetPlayers.Contains(victim))
