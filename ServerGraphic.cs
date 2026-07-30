@@ -20,12 +20,11 @@ public class ServerGraphicConfig : BasePluginConfig
     public int ImageWidth { get; set; } = 250;
 
     [JsonPropertyName("ImageHeight")]
-    public int ImageHeight { get; set; } = 20;
+    public int ImageHeight { get; set; } = 35;
 
     [JsonPropertyName("UpdateTicks")]
     public int UpdateTicks { get; set; } = 1; 
 
-    // 【修改】將原本的 DisplayDuration 拆分為兩種不同情境的秒數
     [JsonPropertyName("DeathDisplayDuration")]
     public float DeathDisplayDuration { get; set; } = 3.0f; // 對應 spec_freeze_time
 
@@ -36,7 +35,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.22"; // 升級為 1.0.22 (雙重秒數獨立設定版)
+    public override string ModuleVersion => "1.0.23"; // 升級為 1.0.23 (僅限死者顯示版)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -46,7 +45,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private int _tickInterval = 1; 
 
     private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
-    private bool _isRoundEnd = false; // 用來防止死亡計時器跟回合結束計時器打架
+    private bool _isRoundEnd = false; 
 
     public override void Load(bool hotReload)
     {
@@ -62,7 +61,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            // 【效能極限優化】：保留反向迴圈，不產生記憶體垃圾
+            // 效能極限優化：使用反向迴圈，不產生記憶體垃圾
             for (int i = _targetPlayers.Count - 1; i >= 0; i--)
             {
                 var player = _targetPlayers[i];
@@ -82,7 +81,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
-    // 回合開始時重置狀態
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
@@ -92,34 +90,40 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-    // 【新增】回合結束事件
     [GameEventHandler]
     public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
         if (!IsLive()) return HookResult.Continue;
 
-        _isRoundEnd = true; // 標記回合已結束，覆蓋掉任何進行中的死亡計時器
+        _isRoundEnd = true; 
+        
+        // 【關鍵修改】：先清空名單，確保不會有存活者殘留
+        _targetPlayers.Clear();
 
-        // 回合結束時，將所有有效玩家加入名單
+        // 重新抓取要顯示的玩家
         foreach (var player in Utilities.GetPlayers())
         {
             if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
             {
-                if (!_targetPlayers.Contains(player))
+                // 【關鍵修改】：只挑選「有隊伍(大於等於2為T/CT)」且「狀態是死亡的(!PawnIsAlive)」
+                if (player.TeamNum >= 2 && !player.PawnIsAlive)
                 {
                     _targetPlayers.Add(player);
                 }
             }
         }
         
-        bShowingServerGraphic = true;
-
-        // 使用回合結束的獨立秒數 (預設 5 秒)
-        AddTimer(Config.RoundEndDisplayDuration, () =>
+        // 如果名單內有人（表示有人死掉），才啟動顯示與計時器
+        if (_targetPlayers.Count > 0)
         {
-            _targetPlayers.Clear();
-            bShowingServerGraphic = false;
-        });
+            bShowingServerGraphic = true;
+
+            AddTimer(Config.RoundEndDisplayDuration, () =>
+            {
+                _targetPlayers.Clear();
+                bShowingServerGraphic = false;
+            });
+        }
 
         return HookResult.Continue;
     }
@@ -134,13 +138,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (!IsLive()) return HookResult.Continue;
 
-        // 0.2 秒延遲顯示
         AddTimer(0.2f, () =>
         {
-            // 如果這 0.2 秒內回合剛好結束了，就直接交給 OnRoundEnd 去處理，這裡不動作
             if (_isRoundEnd) return; 
             
-            // 再次確認玩家狀態
             if (victim == null || !victim.IsValid) return;
 
             if (!_targetPlayers.Contains(victim))
@@ -149,10 +150,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             }
             bShowingServerGraphic = true;
 
-            // 使用玩家死亡的獨立秒數 (預設 3 秒)
             AddTimer(Config.DeathDisplayDuration, () =>
             {
-                // 如果在計時期間回合結束了，就不提早移除他，讓回合結束的 5 秒計時器來接手
                 if (_isRoundEnd) return; 
 
                 if (_targetPlayers.Contains(victim))
@@ -171,7 +170,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
-    // 嚴格檢查是否為正規競技 (阻擋暖身與刀局)
     private bool IsLive()
     {
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
