@@ -82,58 +82,42 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
+// 替換原本的 OnEventRoundStart 變成 OnPlayerDeath
     [GameEventHandler]
-    public HookResult OnEventRoundStart(EventRoundStart @event, GameEventInfo info)
+    public HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
-        ClearAllTimers();
+        var victim = @event.Userid;
 
-        _delayTimer = AddTimer(0.2f, () =>
+        // 安全性檢查：確認死者存在且不是 BOT
+        if (victim == null || !victim.IsValid || victim.IsBot || victim.IsHLTV) 
+            return HookResult.Continue;
+
+        // 判斷是否為正式回合 (暖身不顯示)
+        if (!IsLive()) return HookResult.Continue;
+
+        // 把死掉的玩家加入發送名單，你原本的 OnTick 就會開始對他發送圖片
+        if (!_targetPlayers.Contains(victim))
         {
-            if (!IsLive()) return;
+            _targetPlayers.Add(victim);
+        }
+        bShowingServerGraphic = true;
 
-            var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-            if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
+        // 依照設定檔的秒數，時間到就把「他」從名單踢除
+        AddTimer(Config.DisplayDuration, () =>
+        {
+            if (_targetPlayers.Contains(victim))
             {
-                if (!gameRulesProxy.GameRules.FreezePeriod) return;
+                _targetPlayers.Remove(victim);
             }
 
-            // 【建立名單】：回合開始時，一次性把符合資格的人點名出來
-            _targetPlayers.Clear();
-            foreach (var player in Utilities.GetPlayers())
+            // 如果大家都復活或沒人死了 (名單清空)，關閉開關
+            if (_targetPlayers.Count == 0)
             {
-                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
-                {
-                    if (player.TeamNum == 2 || player.TeamNum == 3) // 2是T，3是CT
-                    {
-                        _targetPlayers.Add(player); // 加入發送名單
-                    }
-                }
+                bShowingServerGraphic = false;
             }
-
-            bShowingServerGraphic = true;
-
-            _displayTimer = AddTimer(Config.DisplayDuration, () =>
-            {
-                CloseHUD();
-            });
         });
 
         return HookResult.Continue;
-    }
-
-    private void CloseHUD()
-    {
-        bShowingServerGraphic = false; 
-        _targetPlayers.Clear(); // 顯示結束後，清空名單釋放伺服器資源
-    }
-
-    private void ClearAllTimers()
-    {
-        _delayTimer?.Kill();
-        _delayTimer = null;
-
-        _displayTimer?.Kill();
-        _displayTimer = null;
     }
 
     #region Helpers
@@ -142,41 +126,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
         {
+            // 只要是暖身階段，就回傳 false (不顯示圖片)
             if (gameRulesProxy.GameRules.WarmupPeriod) return false;
         }
 
-        var maxMoney = ConVar.Find("mp_maxmoney");
-        if (maxMoney != null)
-        {
-            try { if (maxMoney.GetPrimitiveValue<int>() == 0) return false; } catch { }
-        }
-
-        var giveC4 = ConVar.Find("mp_give_player_c4");
-        if (giveC4 != null)
-        {
-            try { if (giveC4.GetPrimitiveValue<int>() == 0) return false; } catch { }
-            try { if (giveC4.GetPrimitiveValue<bool>() == false) return false; } catch { }
-        }
-
-        var freeArmor = ConVar.Find("mp_free_armor");
-        if (freeArmor != null)
-        {
-            try { if (freeArmor.GetPrimitiveValue<int>() == 1) return false; } catch { }
-            try { if (freeArmor.GetPrimitiveValue<bool>() == true) return false; } catch { }
-        }
-
-        var ctSecondary = ConVar.Find("mp_ct_default_secondary");
-        if (ctSecondary != null)
-        {
-            try { if (string.IsNullOrEmpty(ctSecondary.GetPrimitiveValue<string>())) return false; } catch { }
-        }
-
-        var tSecondary = ConVar.Find("mp_t_default_secondary");
-        if (tSecondary != null)
-        {
-            try { if (string.IsNullOrEmpty(tSecondary.GetPrimitiveValue<string>())) return false; } catch { }
-        }
-
+        // 把原本檢查 mp_maxmoney、C4 等繁雜的 Cvar 邏輯全刪了
+        // 這樣刀場 (通常會沒收 C4 和金錢) 圖片也能正常彈出來！
         return true;
     }
     #endregion
