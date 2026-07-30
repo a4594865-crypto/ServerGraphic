@@ -26,16 +26,16 @@ public class ServerGraphicConfig : BasePluginConfig
     public int UpdateTicks { get; set; } = 1; 
 
     [JsonPropertyName("DeathDisplayDuration")]
-    public float DeathDisplayDuration { get; set; } = 3.0f; // 一般中途死亡的顯示秒數
+    public float DeathDisplayDuration { get; set; } = 2.5f; // 可以安心設為 2.5 秒
 
     [JsonPropertyName("RoundEndDisplayDuration")]
-    public float RoundEndDisplayDuration { get; set; } = 5.0f; // 最後死亡(觸發回合結束)的顯示秒數
+    public float RoundEndDisplayDuration { get; set; } = 5.0f; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.24"; // 升級為 1.0.24 (僅限最後死亡玩家版)
+    public override string ModuleVersion => "1.0.25"; // 升級 1.0.25：零延遲瞬間顯示版
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -46,6 +46,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
     private bool _isRoundEnd = false; 
+    private CCSPlayerController? _lastVictim = null; // 記錄最後死掉的人
 
     public override void Load(bool hotReload)
     {
@@ -53,6 +54,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             bShowingServerGraphic = false;
             _isRoundEnd = false;
+            _lastVictim = null;
             _targetPlayers.Clear(); 
         });
 
@@ -61,7 +63,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            // 效能極限優化：使用反向迴圈
             for (int i = _targetPlayers.Count - 1; i >= 0; i--)
             {
                 var player = _targetPlayers[i];
@@ -77,7 +78,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         Config = config;
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-        
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
@@ -85,25 +85,9 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
         _isRoundEnd = false;
+        _lastVictim = null;
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
-        return HookResult.Continue;
-    }
-
-    [GameEventHandler]
-    public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
-    {
-        if (!IsLive()) return HookResult.Continue;
-
-        _isRoundEnd = true; 
-        
-        // 回合結束時，把還在看 3 秒圖片的「舊死者」清掉
-        // 這樣畫面就能完全讓給接下來 0.2 秒後要顯示的「最後死者」
-        _targetPlayers.Clear();
-        bShowingServerGraphic = false;
-
-        // 注意：這裡完全不需要掃描玩家了！極度省效能！
-
         return HookResult.Continue;
     }
 
@@ -117,35 +101,67 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (!IsLive()) return HookResult.Continue;
 
-        // 等待 0.2 秒
-        AddTimer(0.2f, () =>
+        // 【改變重點】：0 延遲！瞬間加入名單並顯示圖片
+        if (!_targetPlayers.Contains(victim))
         {
-            if (victim == null || !victim.IsValid) return;
+            _targetPlayers.Add(victim);
+        }
+        bShowingServerGraphic = true;
+        _lastVictim = victim; // 記錄他可能是最後死的人
 
-            if (!_targetPlayers.Contains(victim))
+        // 給予基本的 2.5 秒 / 3 秒 Timer
+        AddTimer(Config.DeathDisplayDuration, () =>
+        {
+            // 如果回合結束了，且他真的是最後死的人，那就交給 OnRoundEnd 的 5 秒 Timer 去關閉，這裡不提早關
+            if (_isRoundEnd && _lastVictim == victim) 
+                return; 
+
+            if (_targetPlayers.Contains(victim))
             {
-                _targetPlayers.Add(victim);
+                _targetPlayers.Remove(victim);
             }
+
+            if (_targetPlayers.Count == 0)
+            {
+                bShowingServerGraphic = false;
+            }
+        });
+
+        return HookResult.Continue;
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
+    {
+        if (!IsLive()) return HookResult.Continue;
+
+        _isRoundEnd = true; 
+        
+        // 瞬間清空畫面上其他可能還在看 2.5 秒圖片的「舊死者」
+        _targetPlayers.Clear();
+        
+        // 如果有抓到「最後死的人」，馬上把畫面專屬給他，並發送 5 秒的 Timer
+        if (_lastVictim != null && _lastVictim.IsValid)
+        {
+            _targetPlayers.Add(_lastVictim);
             bShowingServerGraphic = true;
 
-            // 【核心邏輯】：判斷這 0.2 秒內回合是否結束了？
-            // 如果已經結束 (_isRoundEnd == true)，代表他是最後一個死的，給 5 秒
-            // 如果還沒結束，代表是一般擊殺，給 3 秒
-            float displayDuration = _isRoundEnd ? Config.RoundEndDisplayDuration : Config.DeathDisplayDuration;
-
-            AddTimer(displayDuration, () =>
+            AddTimer(Config.RoundEndDisplayDuration, () =>
             {
-                if (_targetPlayers.Contains(victim))
+                if (_targetPlayers.Contains(_lastVictim))
                 {
-                    _targetPlayers.Remove(victim);
+                    _targetPlayers.Remove(_lastVictim);
                 }
-
                 if (_targetPlayers.Count == 0)
                 {
                     bShowingServerGraphic = false;
                 }
             });
-        });
+        }
+        else
+        {
+            bShowingServerGraphic = false;
+        }
 
         return HookResult.Continue;
     }
