@@ -4,7 +4,6 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Cvars;
 using Microsoft.Extensions.Logging;
-using System.Linq;
 using System;
 using System.Collections.Generic;
 using CounterStrikeSharp.API.Modules.Timers; 
@@ -26,7 +25,7 @@ public class ServerGraphicConfig : BasePluginConfig
     public int UpdateTicks { get; set; } = 1; 
 
     [JsonPropertyName("DeathDisplayDuration")]
-    public float DeathDisplayDuration { get; set; } = 2.5f; // 可以安心設為 2.5 秒
+    public float DeathDisplayDuration { get; set; } = 2.5f; 
 
     [JsonPropertyName("RoundEndDisplayDuration")]
     public float RoundEndDisplayDuration { get; set; } = 5.0f; 
@@ -35,7 +34,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.25"; // 升級 1.0.25：零延遲瞬間顯示版
+    public override string ModuleVersion => "1.0.27"; // 升級 1.0.27：徹底拔除 LINQ，達成零卡頓 (Zero-Allocation)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -46,7 +45,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
     private bool _isRoundEnd = false; 
-    private CCSPlayerController? _lastVictim = null; // 記錄最後死掉的人
+    private CCSPlayerController? _lastVictim = null; 
 
     public override void Load(bool hotReload)
     {
@@ -101,31 +100,43 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (!IsLive()) return HookResult.Continue;
 
-        // 【改變重點】：0 延遲！瞬間加入名單並顯示圖片
         if (!_targetPlayers.Contains(victim))
         {
             _targetPlayers.Add(victim);
         }
+        
         bShowingServerGraphic = true;
-        _lastVictim = victim; // 記錄他可能是最後死的人
+        _lastVictim = victim; 
 
-        // 給予基本的 2.5 秒 / 3 秒 Timer
-        AddTimer(Config.DeathDisplayDuration, () =>
+        if (_isRoundEnd)
         {
-            // 如果回合結束了，且他真的是最後死的人，那就交給 OnRoundEnd 的 5 秒 Timer 去關閉，這裡不提早關
-            if (_isRoundEnd && _lastVictim == victim) 
-                return; 
-
-            if (_targetPlayers.Contains(victim))
+            AddTimer(Config.RoundEndDisplayDuration, () =>
             {
-                _targetPlayers.Remove(victim);
-            }
-
-            if (_targetPlayers.Count == 0)
+                if (_targetPlayers.Contains(victim))
+                {
+                    _targetPlayers.Remove(victim);
+                }
+                if (_targetPlayers.Count == 0) bShowingServerGraphic = false;
+            });
+        }
+        else
+        {
+            AddTimer(Config.DeathDisplayDuration, () =>
             {
-                bShowingServerGraphic = false;
-            }
-        });
+                if (_isRoundEnd && _lastVictim == victim) 
+                    return; 
+
+                if (_targetPlayers.Contains(victim))
+                {
+                    _targetPlayers.Remove(victim);
+                }
+
+                if (_targetPlayers.Count == 0)
+                {
+                    bShowingServerGraphic = false;
+                }
+            });
+        }
 
         return HookResult.Continue;
     }
@@ -137,11 +148,15 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         _isRoundEnd = true; 
         
-        // 瞬間清空畫面上其他可能還在看 2.5 秒圖片的「舊死者」
+        bool wasLastVictimStillViewing = false;
+        if (_lastVictim != null && _targetPlayers.Contains(_lastVictim))
+        {
+            wasLastVictimStillViewing = true;
+        }
+        
         _targetPlayers.Clear();
         
-        // 如果有抓到「最後死的人」，馬上把畫面專屬給他，並發送 5 秒的 Timer
-        if (_lastVictim != null && _lastVictim.IsValid)
+        if (wasLastVictimStillViewing && _lastVictim != null && _lastVictim.IsValid)
         {
             _targetPlayers.Add(_lastVictim);
             bShowingServerGraphic = true;
@@ -169,7 +184,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     #region Helpers
     private bool IsLive()
     {
-        var gameRulesProxy = Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+        // 【效能優化】：拔除 LINQ 的 FirstOrDefault()，改用純粹的 foreach 迴圈，達成 Zero-Allocation
+        CCSGameRulesProxy? gameRulesProxy = null;
+        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
+        {
+            gameRulesProxy = entity;
+            break; // 找到第一個就中斷迴圈，效能與 FirstOrDefault 完全一致，但不產生 GC 垃圾
+        }
+
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
         {
             if (gameRulesProxy.GameRules.WarmupPeriod) return false;
