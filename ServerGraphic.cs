@@ -34,8 +34,8 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.27"; // 升級 1.0.27：徹底拔除 LINQ，達成零卡頓 (Zero-Allocation)
-    public override string ModuleAuthor => "unfortunate";
+    public override string ModuleVersion => "1.0.28"; // 已升級版本號以供辨識
+    public override string ModuleAuthor => "unfortunate / Optimized";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
@@ -83,10 +83,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        // === 原本的狀態重置邏輯完全保留 ===
         _isRoundEnd = false;
         _lastVictim = null;
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
+
+        // === 【新增邏輯】判斷是否為刀局。若是，全場發送一次原生約 5 秒自動淡出的 LOGO HUD ===
+        if (IsKnifeRound())
+        {
+            foreach (var player in Utilities.GetPlayers())
+            {
+                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                {
+                    player.PrintToCenterHtml(currentImageHtml);
+                }
+            }
+        }
+
         return HookResult.Continue;
     }
 
@@ -182,6 +196,26 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
+    // 【新增輔助函式】完美達成 Zero-Allocation 的刀局判斷，利用你現有的 IsLive() 反向推導
+    private bool IsKnifeRound()
+    {
+        bool isWarmup = false;
+        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
+        {
+            if (entity.GameRules != null)
+            {
+                isWarmup = entity.GameRules.WarmupPeriod;
+            }
+            break; // 找到第一個實體就中斷迴圈，效能極佳
+        }
+
+        // 1. 如果正在暖身期，絕對不是刀局
+        if (isWarmup) return false;
+
+        // 2. 如果不是暖身期，且 IsLive() 為 false (代表沒發小槍、沒發C4、沒錢)，那就是刀局！
+        return !IsLive();
+    }
+
     private bool IsLive()
     {
         // 【效能優化】：拔除 LINQ 的 FirstOrDefault()，改用純粹的 foreach 迴圈，達成 Zero-Allocation
