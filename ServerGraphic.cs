@@ -89,17 +89,22 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
-        // === 【新增邏輯】判斷是否為刀局。若是，全場發送一次原生約 5 秒自動淡出的 LOGO HUD ===
-        if (IsKnifeRound())
+        // === 使用不閃爍的單次觸發寫法 ===
+        // 延遲 0.25 秒，完美避開 CS2 在「1秒重新開始」瞬間強制清空 UI 的底層機制
+        AddTimer(0.25f, () =>
         {
-            foreach (var player in Utilities.GetPlayers())
+            if (IsKnifeRound())
             {
-                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                foreach (var player in Utilities.GetPlayers())
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                    {
+                        // 就像 LiteMatchManager 一樣只發送一次，絕不閃爍，交給原生淡出
+                        player.PrintToCenterHtml(currentImageHtml);
+                    }
                 }
             }
-        }
+        });
 
         return HookResult.Continue;
     }
