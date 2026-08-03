@@ -29,48 +29,29 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("RoundEndDisplayDuration")]
     public float RoundEndDisplayDuration { get; set; } = 5.0f; 
-
-    // ================= 新增：刀局專用參數 =================
-    [JsonPropertyName("KnifeImage")]
-    public string KnifeImage { get; set; } = "LINKTO_KNIFE_IMAGE";
-
-    [JsonPropertyName("KnifeImageWidth")]
-    public int KnifeImageWidth { get; set; } = 250;
-
-    [JsonPropertyName("KnifeImageHeight")]
-    public int KnifeImageHeight { get; set; } = 35;
-
-    [JsonPropertyName("KnifeDisplayDuration")]
-    public float KnifeDisplayDuration { get; set; } = 5.0f; // 預設顯示 5 秒
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.36"; // 雙系統獨立版 + 延遲判定修復搶拍 + Zero-Allocation
+    public override string ModuleVersion => "1.0.27"; // 升級 1.0.27：徹底拔除 LINQ，達成零卡頓 (Zero-Allocation)
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
-    
-    // === 原本的死亡/回合結束 HUD 系統 ===
     public bool bShowingServerGraphic = false;
     private string currentImageHtml = "";
+    
+    private int _tickInterval = 1; 
+
     private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
     private bool _isRoundEnd = false; 
     private CCSPlayerController? _lastVictim = null; 
-
-    // === 新增：完全獨立的刀局 HUD 系統 ===
-    public bool bShowingKnifeGraphic = false;
-    private string knifeImageHtml = "";
-
-    private int _tickInterval = 1; 
 
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             bShowingServerGraphic = false;
-            bShowingKnifeGraphic = false; // 重置刀局開關
             _isRoundEnd = false;
             _lastVictim = null;
             _targetPlayers.Clear(); 
@@ -78,25 +59,15 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         RegisterListener<Listeners.OnTick>(() =>
         {
-            // 兩個都沒開，直接無負擔 return
-            if (!bShowingServerGraphic && !bShowingKnifeGraphic) return;
+            if (!bShowingServerGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            // 【效能優化】：迴圈找 Slot 達成 Zero-Allocation，不產生 GC 垃圾
-            for (int i = 0; i < Server.MaxPlayers; i++)
+            for (int i = _targetPlayers.Count - 1; i >= 0; i--)
             {
-                var player = Utilities.GetPlayerFromSlot(i);
-                if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) continue;
-
-                // 系統 1：死亡 HUD (優先顯示)
-                if (bShowingServerGraphic && _targetPlayers.Contains(player))
+                var player = _targetPlayers[i];
+                if (player != null && player.IsValid)
                 {
                     player.PrintToCenterHtml(currentImageHtml);
-                }
-                // 系統 2：刀局 HUD (完全不干擾死亡 HUD)
-                else if (bShowingKnifeGraphic)
-                {
-                    player.PrintToCenterHtml(knifeImageHtml);
                 }
             }
         });
@@ -106,11 +77,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         Config = config;
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
-        
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
-        
-        // 預先準備好刀局的 HTML
-        knifeImageHtml = $"<div style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'><img src='{Config.KnifeImage}' style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'></div>";
     }
 
     [GameEventHandler]
@@ -119,24 +86,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         _isRoundEnd = false;
         _lastVictim = null;
         bShowingServerGraphic = false;
-        bShowingKnifeGraphic = false; // 刀局重置
         _targetPlayers.Clear();
-
-        // 【關鍵修正】：把 IsLive() 的判斷，移進去 1.0 秒的計時器裡面！
-        // 延遲 1 秒後，讓 MatchZy 有足夠時間把刀局的規則 (沒錢、沒C4) 設定完畢
-        AddTimer(1.0f, () => 
-        {
-            if (!IsLive())
-            {
-                bShowingKnifeGraphic = true; // 獨立開關啟動！
-
-                AddTimer(Config.KnifeDisplayDuration, () => 
-                {
-                    bShowingKnifeGraphic = false; // 設定的秒數後關閉 (預設 5 秒)
-                });
-            }
-        });
-
         return HookResult.Continue;
     }
 
