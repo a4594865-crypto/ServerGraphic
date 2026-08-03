@@ -3,6 +3,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Cvars;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using CounterStrikeSharp.API.Modules.Timers; 
@@ -11,7 +12,6 @@ namespace ServerGraphic;
 
 public class ServerGraphicConfig : BasePluginConfig
 {
-    // === 原本的死亡/回合結束 HUD 設定 ===
     [JsonPropertyName("Image")]
     public string Image { get; set; } = "LINKTOIMAGE";
 
@@ -30,7 +30,7 @@ public class ServerGraphicConfig : BasePluginConfig
     [JsonPropertyName("RoundEndDisplayDuration")]
     public float RoundEndDisplayDuration { get; set; } = 5.0f; 
 
-    // === 新增：獨立的刀局凍結時間 HUD 設定 ===
+    // ================= 新增：刀局專用參數 =================
     [JsonPropertyName("KnifeImage")]
     public string KnifeImage { get; set; } = "LINKTO_KNIFE_IMAGE";
 
@@ -39,7 +39,7 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("KnifeImageHeight")]
     public int KnifeImageHeight { get; set; } = 35;
-    
+
     [JsonPropertyName("KnifeDisplayDuration")]
     public float KnifeDisplayDuration { get; set; } = 5.0f; // 預設顯示 5 秒
 }
@@ -47,47 +47,56 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.30"; // 簡單穩定版
+    public override string ModuleVersion => "1.0.36"; // 雙系統獨立版 + 延遲判定修復搶拍 + Zero-Allocation
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
+    
+    // === 原本的死亡/回合結束 HUD 系統 ===
     public bool bShowingServerGraphic = false;
-    
-    // 預先準備好兩種 HTML
     private string currentImageHtml = "";
-    private string knifeImageHtml = ""; 
-    
-    // 【關鍵】：這用來控制現在 OnTick 到底要刷哪一張圖
-    private string _activeHtml = ""; 
-    
-    private int _tickInterval = 1; 
-
     private List<CCSPlayerController> _targetPlayers = new List<CCSPlayerController>();
     private bool _isRoundEnd = false; 
     private CCSPlayerController? _lastVictim = null; 
+
+    // === 新增：完全獨立的刀局 HUD 系統 ===
+    public bool bShowingKnifeGraphic = false;
+    private string knifeImageHtml = "";
+
+    private int _tickInterval = 1; 
 
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             bShowingServerGraphic = false;
+            bShowingKnifeGraphic = false; // 重置刀局開關
             _isRoundEnd = false;
             _lastVictim = null;
             _targetPlayers.Clear(); 
         });
 
-        // 原本最穩定的 OnTick，現在改為印出 _activeHtml
         RegisterListener<Listeners.OnTick>(() =>
         {
-            if (!bShowingServerGraphic) return;
+            // 兩個都沒開，直接無負擔 return
+            if (!bShowingServerGraphic && !bShowingKnifeGraphic) return;
             if (Server.TickCount % _tickInterval != 0) return;
 
-            for (int i = _targetPlayers.Count - 1; i >= 0; i--)
+            // 【效能優化】：迴圈找 Slot 達成 Zero-Allocation，不產生 GC 垃圾
+            for (int i = 0; i < Server.MaxPlayers; i++)
             {
-                var player = _targetPlayers[i];
-                if (player != null && player.IsValid)
+                var player = Utilities.GetPlayerFromSlot(i);
+                if (player == null || !player.IsValid || player.IsBot || player.IsHLTV) continue;
+
+                // 系統 1：死亡 HUD (優先顯示)
+                if (bShowingServerGraphic && _targetPlayers.Contains(player))
                 {
-                    player.PrintToCenterHtml(_activeHtml);
+                    player.PrintToCenterHtml(currentImageHtml);
+                }
+                // 系統 2：刀局 HUD (完全不干擾死亡 HUD)
+                else if (bShowingKnifeGraphic)
+                {
+                    player.PrintToCenterHtml(knifeImageHtml);
                 }
             }
         });
@@ -99,39 +108,31 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
         
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
+        
+        // 預先準備好刀局的 HTML
         knifeImageHtml = $"<div style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'><img src='{Config.KnifeImage}' style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'></div>";
     }
 
-   [GameEventHandler]
+    [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
         _isRoundEnd = false;
         _lastVictim = null;
         bShowingServerGraphic = false;
+        bShowingKnifeGraphic = false; // 刀局重置
         _targetPlayers.Clear();
 
-        // 延遲 1.5 秒避開 CS2 原生 UI 洗畫面
-        AddTimer(1.5f, () =>
+        // 【關鍵修正】：把 IsLive() 的判斷，移進去 1.0 秒的計時器裡面！
+        // 延遲 1 秒後，讓 MatchZy 有足夠時間把刀局的規則 (沒錢、沒C4) 設定完畢
+        AddTimer(1.0f, () => 
         {
-            if (IsKnifeRound())
+            if (!IsLive())
             {
-                _activeHtml = knifeImageHtml; // 切換成刀局圖片
-                
-                foreach (var player in Utilities.GetPlayers())
-                {
-                    if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
-                    {
-                        _targetPlayers.Add(player); // 把所有玩家加入名單
-                    }
-                }
-                
-                bShowingServerGraphic = true; // 開啟顯示
+                bShowingKnifeGraphic = true; // 獨立開關啟動！
 
-                // 照你的要求，預設顯示 5 秒後關閉
-                AddTimer(Config.KnifeDisplayDuration, () =>
+                AddTimer(Config.KnifeDisplayDuration, () => 
                 {
-                    bShowingServerGraphic = false;
-                    _targetPlayers.Clear();
+                    bShowingKnifeGraphic = false; // 設定的秒數後關閉 (預設 5 秒)
                 });
             }
         });
@@ -154,7 +155,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             _targetPlayers.Add(victim);
         }
         
-        _activeHtml = currentImageHtml; // 切換回死亡圖片
         bShowingServerGraphic = true;
         _lastVictim = victim; 
 
@@ -209,7 +209,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         if (wasLastVictimStillViewing && _lastVictim != null && _lastVictim.IsValid)
         {
             _targetPlayers.Add(_lastVictim);
-            _activeHtml = currentImageHtml; // 切換回回合結束圖片
             bShowingServerGraphic = true;
 
             AddTimer(Config.RoundEndDisplayDuration, () =>
@@ -233,30 +232,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
-    private bool IsKnifeRound()
-    {
-        bool isWarmup = false;
-        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
-        {
-            if (entity.GameRules != null)
-            {
-                isWarmup = entity.GameRules.WarmupPeriod;
-            }
-            break; 
-        }
-
-        if (isWarmup) return false;
-        
-        return !IsLive();
-    }
-
     private bool IsLive()
     {
+        // 【效能優化】：拔除 LINQ 的 FirstOrDefault()，改用純粹的 foreach 迴圈，達成 Zero-Allocation
         CCSGameRulesProxy? gameRulesProxy = null;
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
             gameRulesProxy = entity;
-            break; 
+            break; // 找到第一個就中斷迴圈，效能與 FirstOrDefault 完全一致，但不產生 GC 垃圾
         }
 
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
