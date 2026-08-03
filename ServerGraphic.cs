@@ -108,9 +108,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
-        // 【關鍵修改】：將延遲時間拉長到 1.5 秒
-        // 1. 等待 mp_warmup_end 徹底生效，確保 IsKnifeRound() 判斷正確
-        // 2. 避開 CS2 引擎在回合初期的強制 UI 刷新，防止圖片被吃掉
+        // 延遲 1.5 秒，完美避開 CS2 內建的「回合開始」UI 洗畫面
         AddTimer(1.5f, () =>
         {
             if (IsKnifeRound())
@@ -119,7 +117,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 {
                     if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                     {
-                        // 1.5 秒後，畫面已經乾淨，此時發送單次 HTML 就能完美停留並自然淡出
+                        // 就像 LiteMatchManager 一樣，只發送「唯一一次」
                         player.PrintToCenterHtml(knifeImageHtml);
                     }
                 }
