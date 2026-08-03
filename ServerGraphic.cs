@@ -12,6 +12,7 @@ namespace ServerGraphic;
 
 public class ServerGraphicConfig : BasePluginConfig
 {
+    // === 原本的死亡/回合結束 HUD 設定 ===
     [JsonPropertyName("Image")]
     public string Image { get; set; } = "LINKTOIMAGE";
 
@@ -29,17 +30,30 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("RoundEndDisplayDuration")]
     public float RoundEndDisplayDuration { get; set; } = 5.0f; 
+
+    // === 新增：獨立的刀局凍結時間 HUD 設定 ===
+    [JsonPropertyName("KnifeImage")]
+    public string KnifeImage { get; set; } = "LINKTO_KNIFE_IMAGE";
+
+    [JsonPropertyName("KnifeImageWidth")]
+    public int KnifeImageWidth { get; set; } = 250;
+
+    [JsonPropertyName("KnifeImageHeight")]
+    public int KnifeImageHeight { get; set; } = 35;
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.28"; // 已升級版本號以供辨識
-    public override string ModuleAuthor => "unfortunate / Optimized";
+    public override string ModuleVersion => "1.0.28"; 
+    public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
+    
+    // 將兩種 HUD 的 HTML 字串徹底分開
     private string currentImageHtml = "";
+    private string knifeImageHtml = ""; 
     
     private int _tickInterval = 1; 
 
@@ -57,6 +71,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             _targetPlayers.Clear(); 
         });
 
+        // 這裡維持原本的邏輯，只處理死亡與回合結束的持續刷新 (OnTick)
         RegisterListener<Listeners.OnTick>(() =>
         {
             if (!bShowingServerGraphic) return;
@@ -77,21 +92,24 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         Config = config;
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
+        
+        // 預先組裝原本的 HUD
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
+        
+        // 預先組裝獨立的刀局 HUD
+        knifeImageHtml = $"<div style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'><img src='{Config.KnifeImage}' style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'></div>";
     }
 
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        // === 原本的狀態重置邏輯完全保留 ===
         _isRoundEnd = false;
         _lastVictim = null;
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
-        // === 使用不閃爍的單次觸發寫法 ===
-        // 延遲 0.25 秒，完美避開 CS2 在「1秒重新開始」瞬間強制清空 UI 的底層機制
-        AddTimer(0.25f, () =>
+        // 給伺服器 0.1 秒的時間去更新「沒收手槍、歸零金錢」等刀局參數
+        AddTimer(0.1f, () =>
         {
             if (IsKnifeRound())
             {
@@ -99,8 +117,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 {
                     if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                     {
-                        // 就像 LiteMatchManager 一樣只發送一次，絕不閃爍，交給原生淡出
-                        player.PrintToCenterHtml(currentImageHtml);
+                        // 借鑑不閃爍的寫法：在這裡單次發送刀局專屬 LOGO，交給遊戲引擎自然淡出
+                        player.PrintToCenterHtml(knifeImageHtml);
                     }
                 }
             }
@@ -201,7 +219,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers
-    // 【新增輔助函式】完美達成 Zero-Allocation 的刀局判斷，利用你現有的 IsLive() 反向推導
     private bool IsKnifeRound()
     {
         bool isWarmup = false;
@@ -211,24 +228,21 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             {
                 isWarmup = entity.GameRules.WarmupPeriod;
             }
-            break; // 找到第一個實體就中斷迴圈，效能極佳
+            break; 
         }
 
-        // 1. 如果正在暖身期，絕對不是刀局
         if (isWarmup) return false;
-
-        // 2. 如果不是暖身期，且 IsLive() 為 false (代表沒發小槍、沒發C4、沒錢)，那就是刀局！
+        
         return !IsLive();
     }
 
     private bool IsLive()
     {
-        // 【效能優化】：拔除 LINQ 的 FirstOrDefault()，改用純粹的 foreach 迴圈，達成 Zero-Allocation
         CCSGameRulesProxy? gameRulesProxy = null;
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
             gameRulesProxy = entity;
-            break; // 找到第一個就中斷迴圈，效能與 FirstOrDefault 完全一致，但不產生 GC 垃圾
+            break; 
         }
 
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
