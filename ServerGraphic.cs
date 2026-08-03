@@ -100,7 +100,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         knifeImageHtml = $"<div style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'><img src='{Config.KnifeImage}' style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'></div>";
     }
 
-    [GameEventHandler]
+   [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
         _isRoundEnd = false;
@@ -108,8 +108,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
-        // 給伺服器 0.1 秒的時間去更新「沒收手槍、歸零金錢」等刀局參數
-        AddTimer(0.1f, () =>
+        // 【關鍵修改】：將延遲時間拉長到 1.5 秒
+        // 1. 等待 mp_warmup_end 徹底生效，確保 IsKnifeRound() 判斷正確
+        // 2. 避開 CS2 引擎在回合初期的強制 UI 刷新，防止圖片被吃掉
+        AddTimer(1.5f, () =>
         {
             if (IsKnifeRound())
             {
@@ -117,7 +119,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 {
                     if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                     {
-                        // 借鑑不閃爍的寫法：在這裡單次發送刀局專屬 LOGO，交給遊戲引擎自然淡出
+                        // 1.5 秒後，畫面已經乾淨，此時發送單次 HTML 就能完美停留並自然淡出
                         player.PrintToCenterHtml(knifeImageHtml);
                     }
                 }
