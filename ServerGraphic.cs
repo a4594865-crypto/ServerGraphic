@@ -3,7 +3,6 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Cvars;
-using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using CounterStrikeSharp.API.Modules.Timers; 
@@ -40,20 +39,26 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("KnifeImageHeight")]
     public int KnifeImageHeight { get; set; } = 35;
+    
+    [JsonPropertyName("KnifeDisplayDuration")]
+    public float KnifeDisplayDuration { get; set; } = 5.0f; // 預設顯示 5 秒
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.28"; 
+    public override string ModuleVersion => "1.0.30"; // 簡單穩定版
     public override string ModuleAuthor => "unfortunate";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
     
-    // 將兩種 HUD 的 HTML 字串徹底分開
+    // 預先準備好兩種 HTML
     private string currentImageHtml = "";
     private string knifeImageHtml = ""; 
+    
+    // 【關鍵】：這用來控制現在 OnTick 到底要刷哪一張圖
+    private string _activeHtml = ""; 
     
     private int _tickInterval = 1; 
 
@@ -71,7 +76,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             _targetPlayers.Clear(); 
         });
 
-        // 這裡維持原本的邏輯，只處理死亡與回合結束的持續刷新 (OnTick)
+        // 原本最穩定的 OnTick，現在改為印出 _activeHtml
         RegisterListener<Listeners.OnTick>(() =>
         {
             if (!bShowingServerGraphic) return;
@@ -82,7 +87,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 var player = _targetPlayers[i];
                 if (player != null && player.IsValid)
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    player.PrintToCenterHtml(_activeHtml);
                 }
             }
         });
@@ -93,10 +98,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         Config = config;
         _tickInterval = Config.UpdateTicks <= 0 ? 1 : Config.UpdateTicks;
         
-        // 預先組裝原本的 HUD
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
-        
-        // 預先組裝獨立的刀局 HUD
         knifeImageHtml = $"<div style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'><img src='{Config.KnifeImage}' style='width: {Config.KnifeImageWidth}px; height: {Config.KnifeImageHeight}px;'></div>";
     }
 
@@ -108,19 +110,29 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
-        // 延遲 1.5 秒，完美避開 CS2 內建的「回合開始」UI 洗畫面
+        // 延遲 1.5 秒避開 CS2 原生 UI 洗畫面
         AddTimer(1.5f, () =>
         {
             if (IsKnifeRound())
             {
+                _activeHtml = knifeImageHtml; // 切換成刀局圖片
+                
                 foreach (var player in Utilities.GetPlayers())
                 {
                     if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
                     {
-                        // 就像 LiteMatchManager 一樣，只發送「唯一一次」
-                        player.PrintToCenterHtml(knifeImageHtml);
+                        _targetPlayers.Add(player); // 把所有玩家加入名單
                     }
                 }
+                
+                bShowingServerGraphic = true; // 開啟顯示
+
+                // 照你的要求，預設顯示 5 秒後關閉
+                AddTimer(Config.KnifeDisplayDuration, () =>
+                {
+                    bShowingServerGraphic = false;
+                    _targetPlayers.Clear();
+                });
             }
         });
 
@@ -142,6 +154,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
             _targetPlayers.Add(victim);
         }
         
+        _activeHtml = currentImageHtml; // 切換回死亡圖片
         bShowingServerGraphic = true;
         _lastVictim = victim; 
 
@@ -196,6 +209,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         if (wasLastVictimStillViewing && _lastVictim != null && _lastVictim.IsValid)
         {
             _targetPlayers.Add(_lastVictim);
+            _activeHtml = currentImageHtml; // 切換回回合結束圖片
             bShowingServerGraphic = true;
 
             AddTimer(Config.RoundEndDisplayDuration, () =>
