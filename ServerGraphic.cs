@@ -264,8 +264,17 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     #region Helpers (修復點 2 & 4：效能最佳化與防誤傷版)
     private bool IsLive()
     {
-        // 使用內建的 Utilities.GetRules() 取代耗時的實體遍歷
-        var rules = Utilities.GetRules();
+        // 取得當前的遊戲規則狀態
+        CCSGameRules? rules = null;
+        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
+        {
+            if (entity != null)
+            {
+                rules = entity.GameRules;
+                break;
+            }
+        }
+
         if (rules != null && rules.WarmupPeriod) return false;
 
         // 使用快取的 ConVar 避免瞬間負載飆高
@@ -283,7 +292,16 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
     private bool IsKnifeRound()
     {
-        var rules = Utilities.GetRules();
+        CCSGameRules? rules = null;
+        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
+        {
+            if (entity != null)
+            {
+                rules = entity.GameRules;
+                break;
+            }
+        }
+        
         if (rules != null && rules.WarmupPeriod) return false;
         
         return !IsLive();
