@@ -37,7 +37,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.31"; // 升級 1.0.31：加入過渡鎖，徹底解決打完 .stay 進入正式局時的誤判
+    public override string ModuleVersion => "1.0.29"; // 升級 1.0.29：徹底消滅跨回合的「幽靈計時器」
     public override string ModuleAuthor => "unfortunate (Modified)";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -50,24 +50,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private bool _isRoundEnd = false; 
     private CCSPlayerController? _lastVictim = null; 
 
-    // 計時器管理員
+    // --- 【計時器管理員】 ---
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _knifeDelayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _knifeDisplayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _roundEndTimer;
-    private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = new();
-
-    // 狀態追蹤
-    private bool _wasInKnifeRound = false;
     
-    // --- 新增：用來鎖住「刀局剛結束、準備透過 .stay/.swap 進入正式局」的過渡鎖 ---
-    private bool _isPendingLiveAfterKnife = false;
+    // 用於追蹤每個玩家專屬的死亡計時器 (Key: SteamID)
+    private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = new();
 
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             ResetAllStatesAndTimers();
-            _wasInKnifeRound = false;
-            _isPendingLiveAfterKnife = false;
         });
 
         RegisterListener<Listeners.OnTick>(() =>
@@ -93,6 +88,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
+    // --- 新增：一鍵重置所有狀態與強制擊殺所有計時器 ---
     private void ResetAllStatesAndTimers()
     {
         _isRoundEnd = false;
@@ -100,54 +96,55 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
 
+        // 殺死刀局計時器
+        _knifeDelayTimer?.Kill(); _knifeDelayTimer = null;
         _knifeDisplayTimer?.Kill(); _knifeDisplayTimer = null;
+        
+        // 殺死回合結束計時器
         _roundEndTimer?.Kill(); _roundEndTimer = null;
 
-        foreach (var timer in _deathTimers.Values) timer.Kill();
+        // 殺死所有死亡專屬的幽靈計時器
+        foreach (var timer in _deathTimers.Values)
+        {
+            timer.Kill();
+        }
         _deathTimers.Clear();
     }
 
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
+        // 回合一開始，直接把上一局可能殘留的所有「幽靈計時器」通通殺掉
         ResetAllStatesAndTimers(); 
 
-        // 【關鍵防線】：如果我們剛打完刀局，現在正準備因 .stay / .swap 重啟進入正式局
-        if (_isPendingLiveAfterKnife)
+        if (IsKnifeRound())
         {
-            _isPendingLiveAfterKnife = false; // 解鎖
-            return HookResult.Continue; // 直接跳過，絕對不顯示 HUD！
-        }
-
-        bool currentIsKnife = IsKnifeRound();
-
-        if (currentIsKnife && !_wasInKnifeRound)
-        {
-            _wasInKnifeRound = true; 
-
-            _targetPlayers.Clear();
-            foreach (var player in Utilities.GetPlayers())
+            _knifeDelayTimer = AddTimer(0.0f, () => 
             {
-                if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                // 【關鍵修復】：1 秒後真正要顯示前，再做一次二次確認！
+                // 如果這時候已經切換成正式局 (live.cfg 載入完畢)，就直接中斷，不顯示 HUD。
+                if (!IsKnifeRound()) return; 
+
+                _targetPlayers.Clear();
+                foreach (var player in Utilities.GetPlayers())
                 {
-                    _targetPlayers.Add(player);
+                    if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                    {
+                        _targetPlayers.Add(player);
+                    }
                 }
-            }
 
-            if (_targetPlayers.Count > 0)
-            {
-                bShowingServerGraphic = true;
-
-                _knifeDisplayTimer = AddTimer(Config.KnifeRoundDisplayDuration, () => 
+                if (_targetPlayers.Count > 0)
                 {
-                    bShowingServerGraphic = false;
-                    _targetPlayers.Clear();
-                });
-            }
-        }
-        else if (!currentIsKnife)
-        {
-            _wasInKnifeRound = false;
+                    bShowingServerGraphic = true;
+
+                    _knifeDisplayTimer = AddTimer(Config.KnifeRoundDisplayDuration, () => 
+                    {
+                        bShowingServerGraphic = false;
+                        _targetPlayers.Clear();
+                    });
+                }
+            });
         }
 
         return HookResult.Continue;
@@ -172,6 +169,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         _lastVictim = victim; 
         ulong steamId = victim.SteamID;
 
+        // 確保該玩家沒有重複的計時器在跑
         if (_deathTimers.TryGetValue(steamId, out var existingTimer))
         {
             existingTimer.Kill();
@@ -179,6 +177,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (_isRoundEnd)
         {
+            // 回合已經結束時的死亡，掛載到回合結束的統一計時器處理
             _roundEndTimer?.Kill();
             _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () =>
             {
@@ -188,6 +187,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         }
         else
         {
+            // 正規回合中的死亡，記錄在該玩家專屬的 Dictionary 中
             _deathTimers[steamId] = AddTimer(Config.DeathDisplayDuration, () =>
             {
                 if (_isRoundEnd && _lastVictim == victim) 
@@ -196,6 +196,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
                 if (_targetPlayers.Contains(victim)) _targetPlayers.Remove(victim);
                 if (_targetPlayers.Count == 0) bShowingServerGraphic = false;
 
+                // 任務完成後將自己從清單移除
                 _deathTimers.Remove(steamId);
             });
         }
@@ -206,13 +207,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
-        // 如果當前正在打刀局，當刀局結束的那一刻，啟動「準備進入正式局」的過渡鎖！
-        if (_wasInKnifeRound)
-        {
-            _isPendingLiveAfterKnife = true;
-            _wasInKnifeRound = false;
-        }
-
         if (!IsLive()) return HookResult.Continue;
 
         _isRoundEnd = true; 
@@ -225,6 +219,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         _targetPlayers.Clear();
         
+        // 殺死所有普通死亡計時器，因為回合結束了，準備交接給回合結束計時器
         foreach (var timer in _deathTimers.Values) timer.Kill();
         _deathTimers.Clear();
         _roundEndTimer?.Kill();
