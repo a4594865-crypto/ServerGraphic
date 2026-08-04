@@ -37,7 +37,7 @@ public class ServerGraphicConfig : BasePluginConfig
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.30"; // 升級 1.0.30：拔除延遲，改用狀態追蹤實現刀局 HUD 秒開與完美防錯
+    public override string ModuleVersion => "1.0.31"; // 升級 1.0.31：加入過渡鎖，徹底解決打完 .stay 進入正式局時的誤判
     public override string ModuleAuthor => "unfortunate (Modified)";
 
     public ServerGraphicConfig Config { get; set; } = new();
@@ -55,8 +55,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private CounterStrikeSharp.API.Modules.Timers.Timer? _roundEndTimer;
     private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = new();
 
-    // --- 新增：追蹤目前是否正處於刀局中 ---
+    // 狀態追蹤
     private bool _wasInKnifeRound = false;
+    
+    // --- 新增：用來鎖住「刀局剛結束、準備透過 .stay/.swap 進入正式局」的過渡鎖 ---
+    private bool _isPendingLiveAfterKnife = false;
 
     public override void Load(bool hotReload)
     {
@@ -64,6 +67,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             ResetAllStatesAndTimers();
             _wasInKnifeRound = false;
+            _isPendingLiveAfterKnife = false;
         });
 
         RegisterListener<Listeners.OnTick>(() =>
@@ -108,17 +112,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     {
         ResetAllStatesAndTimers(); 
 
+        // 【關鍵防線】：如果我們剛打完刀局，現在正準備因 .stay / .swap 重啟進入正式局
+        if (_isPendingLiveAfterKnife)
+        {
+            _isPendingLiveAfterKnife = false; // 解鎖
+            return HookResult.Continue; // 直接跳過，絕對不顯示 HUD！
+        }
+
         bool currentIsKnife = IsKnifeRound();
 
-        // 核心邏輯判斷：
-        // 1. 如果當前確實是刀局
-        // 2. 且我們「上一回合不在刀局中」（代表這是剛從熱身賽切進來、或是剛開始打刀局的那個 mp_restartgame 1）
-        // 這樣就能完美排除掉「打完 .STAY 後重啟」的情況（因為打完 .STAY 時，上一回合本來就是刀局，所以不會符合條件）
         if (currentIsKnife && !_wasInKnifeRound)
         {
-            _wasInKnifeRound = true; // 標記我們已經進入刀局狀態
+            _wasInKnifeRound = true; 
 
-            // 【完全沒有延遲】直接抓取玩家，瞬間顯示！
             _targetPlayers.Clear();
             foreach (var player in Utilities.GetPlayers())
             {
@@ -141,7 +147,6 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         }
         else if (!currentIsKnife)
         {
-            // 如果現在已經是正式局（或是回到熱身賽），重置刀局追蹤狀態
             _wasInKnifeRound = false;
         }
 
@@ -201,6 +206,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     [GameEventHandler]
     public HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
+        // 如果當前正在打刀局，當刀局結束的那一刻，啟動「準備進入正式局」的過渡鎖！
+        if (_wasInKnifeRound)
+        {
+            _isPendingLiveAfterKnife = true;
+            _wasInKnifeRound = false;
+        }
+
         if (!IsLive()) return HookResult.Continue;
 
         _isRoundEnd = true; 
