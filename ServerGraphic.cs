@@ -119,8 +119,12 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (IsKnifeRound())
         {
-            _knifeDelayTimer = AddTimer(1.0f, () => 
+            _knifeDelayTimer = AddTimer(0.8f, () => 
             {
+                // 【關鍵修復】：1 秒後真正要顯示前，再做一次二次確認！
+                // 如果這時候已經切換成正式局 (live.cfg 載入完畢)，就直接中斷，不顯示 HUD。
+                if (!IsKnifeRound()) return; 
+
                 _targetPlayers.Clear();
                 foreach (var player in Utilities.GetPlayers())
                 {
