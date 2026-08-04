@@ -29,13 +29,16 @@ public class ServerGraphicConfig : BasePluginConfig
 
     [JsonPropertyName("RoundEndDisplayDuration")]
     public float RoundEndDisplayDuration { get; set; } = 5.0f; 
+
+    [JsonPropertyName("KnifeRoundDisplayDuration")]
+    public float KnifeRoundDisplayDuration { get; set; } = 5.0f; 
 }
 
 public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 {
     public override string ModuleName => "ServerGraphic";
-    public override string ModuleVersion => "1.0.27"; // 升級 1.0.27：徹底拔除 LINQ，達成零卡頓 (Zero-Allocation)
-    public override string ModuleAuthor => "unfortunate";
+    public override string ModuleVersion => "1.0.29"; // 升級 1.0.29：徹底消滅跨回合的「幽靈計時器」
+    public override string ModuleAuthor => "unfortunate (Modified)";
 
     public ServerGraphicConfig Config { get; set; } = new();
     public bool bShowingServerGraphic = false;
@@ -47,14 +50,19 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private bool _isRoundEnd = false; 
     private CCSPlayerController? _lastVictim = null; 
 
+    // --- 【計時器管理員】 ---
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _knifeDelayTimer;
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _knifeDisplayTimer;
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _roundEndTimer;
+    
+    // 用於追蹤每個玩家專屬的死亡計時器 (Key: SteamID)
+    private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = new();
+
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnMapStart>(map => 
         {
-            bShowingServerGraphic = false;
-            _isRoundEnd = false;
-            _lastVictim = null;
-            _targetPlayers.Clear(); 
+            ResetAllStatesAndTimers();
         });
 
         RegisterListener<Listeners.OnTick>(() =>
@@ -80,13 +88,61 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         currentImageHtml = $"<div style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'><img src='{Config.Image}' style='width: {Config.ImageWidth}px; height: {Config.ImageHeight}px;'></div>";
     }
 
-    [GameEventHandler]
-    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
+    // --- 新增：一鍵重置所有狀態與強制擊殺所有計時器 ---
+    private void ResetAllStatesAndTimers()
     {
         _isRoundEnd = false;
         _lastVictim = null;
         bShowingServerGraphic = false;
         _targetPlayers.Clear();
+
+        // 殺死刀局計時器
+        _knifeDelayTimer?.Kill(); _knifeDelayTimer = null;
+        _knifeDisplayTimer?.Kill(); _knifeDisplayTimer = null;
+        
+        // 殺死回合結束計時器
+        _roundEndTimer?.Kill(); _roundEndTimer = null;
+
+        // 殺死所有死亡專屬的幽靈計時器
+        foreach (var timer in _deathTimers.Values)
+        {
+            timer.Kill();
+        }
+        _deathTimers.Clear();
+    }
+
+    [GameEventHandler]
+    public HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
+    {
+        // 回合一開始，直接把上一局可能殘留的所有「幽靈計時器」通通殺掉
+        ResetAllStatesAndTimers(); 
+
+        if (IsKnifeRound())
+        {
+            _knifeDelayTimer = AddTimer(1.0f, () => 
+            {
+                _targetPlayers.Clear();
+                foreach (var player in Utilities.GetPlayers())
+                {
+                    if (player != null && player.IsValid && !player.IsBot && !player.IsHLTV)
+                    {
+                        _targetPlayers.Add(player);
+                    }
+                }
+
+                if (_targetPlayers.Count > 0)
+                {
+                    bShowingServerGraphic = true;
+
+                    _knifeDisplayTimer = AddTimer(Config.KnifeRoundDisplayDuration, () => 
+                    {
+                        bShowingServerGraphic = false;
+                        _targetPlayers.Clear();
+                    });
+                }
+            });
+        }
+
         return HookResult.Continue;
     }
 
@@ -107,34 +163,37 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         bShowingServerGraphic = true;
         _lastVictim = victim; 
+        ulong steamId = victim.SteamID;
+
+        // 確保該玩家沒有重複的計時器在跑
+        if (_deathTimers.TryGetValue(steamId, out var existingTimer))
+        {
+            existingTimer.Kill();
+        }
 
         if (_isRoundEnd)
         {
-            AddTimer(Config.RoundEndDisplayDuration, () =>
+            // 回合已經結束時的死亡，掛載到回合結束的統一計時器處理
+            _roundEndTimer?.Kill();
+            _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () =>
             {
-                if (_targetPlayers.Contains(victim))
-                {
-                    _targetPlayers.Remove(victim);
-                }
+                if (_targetPlayers.Contains(victim)) _targetPlayers.Remove(victim);
                 if (_targetPlayers.Count == 0) bShowingServerGraphic = false;
             });
         }
         else
         {
-            AddTimer(Config.DeathDisplayDuration, () =>
+            // 正規回合中的死亡，記錄在該玩家專屬的 Dictionary 中
+            _deathTimers[steamId] = AddTimer(Config.DeathDisplayDuration, () =>
             {
                 if (_isRoundEnd && _lastVictim == victim) 
                     return; 
 
-                if (_targetPlayers.Contains(victim))
-                {
-                    _targetPlayers.Remove(victim);
-                }
+                if (_targetPlayers.Contains(victim)) _targetPlayers.Remove(victim);
+                if (_targetPlayers.Count == 0) bShowingServerGraphic = false;
 
-                if (_targetPlayers.Count == 0)
-                {
-                    bShowingServerGraphic = false;
-                }
+                // 任務完成後將自己從清單移除
+                _deathTimers.Remove(steamId);
             });
         }
 
@@ -156,21 +215,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         _targetPlayers.Clear();
         
+        // 殺死所有普通死亡計時器，因為回合結束了，準備交接給回合結束計時器
+        foreach (var timer in _deathTimers.Values) timer.Kill();
+        _deathTimers.Clear();
+        _roundEndTimer?.Kill();
+        
         if (wasLastVictimStillViewing && _lastVictim != null && _lastVictim.IsValid)
         {
             _targetPlayers.Add(_lastVictim);
             bShowingServerGraphic = true;
 
-            AddTimer(Config.RoundEndDisplayDuration, () =>
+            _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () =>
             {
-                if (_targetPlayers.Contains(_lastVictim))
-                {
-                    _targetPlayers.Remove(_lastVictim);
-                }
-                if (_targetPlayers.Count == 0)
-                {
-                    bShowingServerGraphic = false;
-                }
+                if (_targetPlayers.Contains(_lastVictim)) _targetPlayers.Remove(_lastVictim);
+                if (_targetPlayers.Count == 0) bShowingServerGraphic = false;
             });
         }
         else
@@ -184,12 +242,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     #region Helpers
     private bool IsLive()
     {
-        // 【效能優化】：拔除 LINQ 的 FirstOrDefault()，改用純粹的 foreach 迴圈，達成 Zero-Allocation
         CCSGameRulesProxy? gameRulesProxy = null;
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
             gameRulesProxy = entity;
-            break; // 找到第一個就中斷迴圈，效能與 FirstOrDefault 完全一致，但不產生 GC 垃圾
+            break; 
         }
 
         if (gameRulesProxy != null && gameRulesProxy.GameRules != null)
@@ -230,6 +287,22 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         }
 
         return true;
+    }
+
+    private bool IsKnifeRound()
+    {
+        bool isWarmup = false;
+        foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
+        {
+            if (entity != null && entity.GameRules != null)
+            {
+                isWarmup = entity.GameRules.WarmupPeriod;
+                break;
+            }
+        }
+        
+        if (isWarmup) return false;
+        return !IsLive();
     }
     #endregion
 }
