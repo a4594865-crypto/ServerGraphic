@@ -233,8 +233,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         // [退回] 拔除 LINQ，使用原生的 foreach，這是獲取實體效能最好的方式
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
-            // 【.NET 10 升級】：更深層的屬性模式匹配
-            if (entity is { GameRules: not null } proxy) return proxy.GameRules;
+            if (entity is not null) return entity.GameRules;
         }
         return null;
     }
