@@ -58,13 +58,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     
     private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = [];
 
+    // 【唯一新增】：GameRules 快取變數，消滅重複搜尋浪費
+    private CCSGameRules? _cachedGameRules = null;
+
     public override void Load(bool hotReload)
     {
         _cvMaxMoney = ConVar.Find("mp_maxmoney");
         _cvGiveC4 = ConVar.Find("mp_give_player_c4");
         _cvFreeArmor = ConVar.Find("mp_free_armor");
 
-        RegisterListener<Listeners.OnMapStart>(map => ResetAllStatesAndTimers());
+        RegisterListener<Listeners.OnMapStart>(map => 
+        {
+            ResetAllStatesAndTimers();
+            _cachedGameRules = null; // 換地圖時清空快取
+        });
 
         RegisterListener<Listeners.OnClientDisconnect>(playerSlot => 
         {
@@ -227,13 +234,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     }
 
     #region Helpers (效能與可讀性兼具版)
-    // 獨立出一個高效率找 GameRules 的方法，避免程式碼重複
+    // 【唯一優化】：加入實體快取判斷，其餘邏輯 100% 照舊
     private CCSGameRules? GetGameRules()
     {
+        if (_cachedGameRules != null) return _cachedGameRules;
+
         // [退回] 拔除 LINQ，使用原生的 foreach，這是獲取實體效能最好的方式
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
-            if (entity is not null) return entity.GameRules;
+            // 【.NET 10 升級】：更深層的屬性模式匹配
+            if (entity is { GameRules: not null } proxy)
+            {
+                _cachedGameRules = proxy.GameRules;
+                return _cachedGameRules;
+            }
         }
         return null;
     }
