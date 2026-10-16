@@ -44,8 +44,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     
     private int _tickInterval = 1; 
 
-    // [保留] .NET 現代語法：集合表達式 []，不影響效能
-    private List<CCSPlayerController> _targetPlayers = [];
+    // 【0-GC 優化】：預先配置容量 (16)，避免正賽擊殺瞬間發生 List / Dictionary 底層陣列擴容
+    private readonly List<CCSPlayerController> _targetPlayers = new(16);
     private bool _isRoundEnd = false; 
     private CCSPlayerController? _lastVictim = null; 
 
@@ -56,10 +56,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
     private CounterStrikeSharp.API.Modules.Timers.Timer? _knifeDisplayTimer;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _roundEndTimer;
     
-    private Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = [];
+    private readonly Dictionary<ulong, CounterStrikeSharp.API.Modules.Timers.Timer> _deathTimers = new(16);
 
-    // 【唯一新增】：GameRules 快取變數，消滅重複搜尋浪費
-    private CCSGameRules? _cachedGameRules = null;
+    // 【0-GC 安全快取】：快取 CCSGameRulesProxy 實體，兼具 IsValid 記憶體安全驗證與 0 全圖掃描
+    private CCSGameRulesProxy? _cachedGameRulesProxy = null;
 
     public override void Load(bool hotReload)
     {
@@ -70,12 +70,13 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         RegisterListener<Listeners.OnMapStart>(map => 
         {
             ResetAllStatesAndTimers();
-            _cachedGameRules = null; // 換地圖時清空快取
+            _cachedGameRulesProxy = null; // 換地圖時清空快取
         });
 
         RegisterListener<Listeners.OnClientDisconnect>(playerSlot => 
         {
-            if (Utilities.GetPlayerFromSlot(playerSlot) is { IsValid: true } player)
+            var player = Utilities.GetPlayerFromSlot(playerSlot);
+            if (player is not null)
             {
                 RemovePlayerFromHUD(player);
             }
@@ -83,14 +84,23 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         RegisterListener<Listeners.OnTick>(() =>
         {
-            if (!bShowingServerGraphic || Server.TickCount % _tickInterval != 0) return; 
+            if (!bShowingServerGraphic) return;
+            if (_tickInterval > 1 && Server.TickCount % _tickInterval != 0) return; 
 
-            for (int i = _targetPlayers.Count - 1; i >= 0; i--)
+            int count = _targetPlayers.Count;
+            if (count == 0)
             {
-                // [保留] 屬性模式匹配：底層效能與普通 if 判斷一樣快，但代碼更乾淨
+                bShowingServerGraphic = false;
+                return;
+            }
+
+            string html = currentImageHtml;
+            for (int i = count - 1; i >= 0; i--)
+            {
+                // 屬性模式匹配：底層效能與普通 if 判斷一樣快，但代碼更乾淨
                 if (_targetPlayers[i] is { IsValid: true, IsBot: false } player)
                 {
-                    player.PrintToCenterHtml(currentImageHtml);
+                    player.PrintToCenterHtml(html);
                 }
                 else
                 {
@@ -143,7 +153,7 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (IsKnifeRound())
         {
-            // [退回] 拔除 LINQ，換回最高效能的傳統 foreach 迴圈，拒絕產生多餘的 GC
+            // 拔除 LINQ，使用最高效能的傳統 foreach 迴圈，拒絕產生多餘的 GC
             foreach (var player in Utilities.GetPlayers())
             {
                 if (player is { IsValid: true, IsBot: false, IsHLTV: false })
@@ -190,8 +200,8 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         if (_isRoundEnd)
         {
-            _roundEndTimer?.Kill();
-            _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () => RemovePlayerFromHUD(victim));
+            // 【修復】：使用各自的 _deathTimers[steamId]，防止回合結束後多人同時死亡(如C4爆炸)時互相覆蓋計時器導致圖片卡死
+            _deathTimers[steamId] = AddTimer(Config.RoundEndDisplayDuration, () => RemovePlayerFromHUD(victim));
         }
         else
         {
@@ -220,10 +230,11 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         
         if (wasLastVictimStillViewing && _lastVictim is { IsValid: true })
         {
-            _targetPlayers.Add(_lastVictim);
+            CCSPlayerController targetVictim = _lastVictim;
+            _targetPlayers.Add(targetVictim);
             bShowingServerGraphic = true;
 
-            _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () => RemovePlayerFromHUD(_lastVictim));
+            _roundEndTimer = AddTimer(Config.RoundEndDisplayDuration, () => RemovePlayerFromHUD(targetVictim));
         }
         else
         {
@@ -233,20 +244,20 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         return HookResult.Continue;
     }
 
-    #region Helpers (效能與可讀性兼具版)
-    // 【唯一優化】：加入實體快取判斷，其餘邏輯 100% 照舊
+    #region Helpers (0-GC 效能與安全快取版)
     private CCSGameRules? GetGameRules()
     {
-        if (_cachedGameRules != null) return _cachedGameRules;
+        if (_cachedGameRulesProxy is { IsValid: true, GameRules: not null })
+        {
+            return _cachedGameRulesProxy.GameRules;
+        }
 
-        // [退回] 拔除 LINQ，使用原生的 foreach，這是獲取實體效能最好的方式
         foreach (var entity in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules"))
         {
-            // 【.NET 10 升級】：更深層的屬性模式匹配
-            if (entity is { GameRules: not null } proxy)
+            if (entity is { IsValid: true, GameRules: not null } proxy)
             {
-                _cachedGameRules = proxy.GameRules;
-                return _cachedGameRules;
+                _cachedGameRulesProxy = proxy;
+                return proxy.GameRules;
             }
         }
         return null;
@@ -258,6 +269,10 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
 
         try 
         { 
+            _cvMaxMoney ??= ConVar.Find("mp_maxmoney");
+            _cvGiveC4 ??= ConVar.Find("mp_give_player_c4");
+            _cvFreeArmor ??= ConVar.Find("mp_free_armor");
+
             if (_cvMaxMoney?.GetPrimitiveValue<int>() is 0) return false; 
             if (_cvGiveC4?.GetPrimitiveValue<int>() is 0) return false;
             if (_cvFreeArmor?.GetPrimitiveValue<int>() is 1) return false;
