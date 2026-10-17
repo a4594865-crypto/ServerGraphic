@@ -86,8 +86,9 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         {
             if (!bShowingServerGraphic) return;
 
-            // 【防呆修復】：如果伺服器目前處於暫停狀態（連動 MatchZy 的 isPaused 或官方暫停），強制關閉圖片渲染，防止解除暫停後 OnTick 暴走卡死 FPS
-            if (MatchZy.isPaused || (GetGameRules() is { IsPaused: true }))
+            // 【防呆修復】：透過 CCSGameRules 安全檢查戰術暫停或超時狀態，防止暫停時計時器凍結導致 OnTick 暴走卡死 FPS
+            var gameRules = GetGameRules();
+            if (gameRules != null && (gameRules.TerroristTimeOutActive || gameRules.CTTimeOutActive))
             {
                 bShowingServerGraphic = false;
                 return;
