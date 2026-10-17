@@ -85,6 +85,14 @@ public class ServerGraphic : BasePlugin, IPluginConfig<ServerGraphicConfig>
         RegisterListener<Listeners.OnTick>(() =>
         {
             if (!bShowingServerGraphic) return;
+
+            // 【防呆修復】：如果伺服器目前處於暫停狀態（連動 MatchZy 的 isPaused 或官方暫停），強制關閉圖片渲染，防止解除暫停後 OnTick 暴走卡死 FPS
+            if (MatchZy.isPaused || (GetGameRules() is { IsPaused: true }))
+            {
+                bShowingServerGraphic = false;
+                return;
+            }
+
             if (_tickInterval > 1 && Server.TickCount % _tickInterval != 0) return; 
 
             int count = _targetPlayers.Count;
